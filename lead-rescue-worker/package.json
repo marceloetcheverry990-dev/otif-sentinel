@@ -1,0 +1,35 @@
+{
+	"name": "lead-rescue-worker",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"start": "wrangler dev",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:security": "vitest run src/helpers/acepta-csv.test.js src/helpers/safe-remote-fetch.test.js src/helpers/evidence-upload.test.js src/helpers/pin-kdf.test.js src/api/r4-endpoint-guards.test.js src/api/driver-auth-hardening.test.js src/api/operator-route-guard.test.js src/api/operator-auth-preservation.test.js",
+		"audit": "npm audit --omit=dev",
+		"audit:all": "npm audit",
+		"dry-run": "wrangler deploy --dry-run",
+		"deploy:staging": "wrangler deploy --env staging",
+		"dry-run:staging": "wrangler deploy --env staging --dry-run",
+		"r8:abuse": "node scripts/r8-abuse-probes.mjs"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "^0.12.4",
+		"fast-check": "^4.8.0",
+		"vitest": "~3.2.6",
+		"wrangler": "^4.75.0"
+	},
+	"dependencies": {
+		"@supabase/supabase-js": "^2.103.0",
+		"csv-parser": "^3.2.0",
+		"dotenv": "^17.4.2",
+		"pg": "^8.20.0",
+		"zod": "^4.3.6"
+	},
+	"overrides": {
+		"ws": "^8.18.3"
+	}
+}

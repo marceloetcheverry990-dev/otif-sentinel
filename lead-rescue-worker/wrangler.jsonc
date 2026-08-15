@@ -1,0 +1,166 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "lead-rescue-pipeline",
+	"main": "src/index.js",
+	"compatibility_date": "2025-01-01", // Fecha moderna para evitar bugs de runtime
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"logpush": false, // Configuración SRE: Evita saturación inicial, usarás logs estructurados luego
+	// 🟢 AUTO-HEALER: El Cron de recuperación
+	"triggers": {
+		"crons": [
+			"*/2 * * * *",
+			"0 2 * * *"
+		]
+	},
+	// 🟢 ENRUTAMIENTO DE COLAS (Zero-Conflict Configuration)
+	"queues": {
+		"producers": [
+			{
+				"binding": "MAIN_QUEUE", // Alineado con env.MAIN_QUEUE
+				"queue": "leads-ingestion-queue"
+			},
+			{
+				"binding": "ENRICHMENT_QUEUE",
+				"queue": "leads-enrichment-queue"
+			},
+			{
+				"binding": "DELIVERY_QUEUE",
+				"queue": "leads-delivery-queue"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "leads-ingestion-queue",
+				"max_batch_size": 50,
+				"max_batch_timeout": 5,
+				"max_retries": 1 // 🟢 FIX PRO: Delegamos la resiliencia a nuestra DB, no a la red
+			},
+			{
+				"queue": "leads-enrichment-queue",
+				"max_batch_size": 50,
+				"max_batch_timeout": 5,
+				"max_retries": 1
+			},
+			{
+				"queue": "leads-delivery-queue",
+				"max_batch_size": 50,
+				"max_batch_timeout": 5,
+				"max_retries": 1
+			}
+		]
+	},
+	// 🟢 CONEXIÓN A SUPABASE (PostgreSQL)
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "8390e963773c4f8e82886e7da7358f70"
+		}
+	],
+	// 🟢 VARIABLES DE ENTORNO (Públicas)
+	"vars": {
+		"PUBLIC_BASE_URL": "https://lead-rescue-pipeline.marceloetcheverry990.workers.dev",
+		// Orígenes CORS permitidos (coma-separados). Vacío = * (solo lab).
+		"CORS_ALLOWED_ORIGINS": "https://lead-rescue-pipeline.marceloetcheverry990.workers.dev,http://localhost:8787,http://127.0.0.1:8787",
+		// OpenAI en enrich: off por defecto (score determinista). Poné "true" para reactivar LLM.
+		"OPENAI_ENRICH_ENABLED": "false",
+		// 🟢 MONITORING CONFIGURATION
+		"MONITORING_ENABLED": "true",
+		"MONITORING_ERROR_TRACKING": "true",
+		"MONITORING_METRICS": "true",
+		"MONITORING_ALERTING": "true",
+		"MONITORING_SAMPLE_RATE": "0.1",
+		"MONITORING_USERNAME": "admin",
+		"MONITORING_TENANT_ID": "empresa_base"
+		// DASHBOARD_SECRET: configurar con `wrangler secret put DASHBOARD_SECRET`
+		// Generar con: openssl rand -base64 32
+		// NUNCA escribir el valor aquí — va exclusivamente como Cloudflare Secret
+	},
+	"r2_buckets": [
+		{
+			"bucket_name": "chat-photos",
+			"binding": "chat_photos",
+			"remote": true
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "DRIVER_REVOKED_JTI",
+			"id": "6ee132b2ac2548bebd5dfae76dc65003"
+		}
+	],
+	// 🟢 STAGING — mismo Hyperdrive/DB; Worker, colas y secrets separados (R8)
+	"env": {
+		"staging": {
+			"name": "lead-rescue-pipeline-staging",
+			"vars": {
+				"PUBLIC_BASE_URL": "https://lead-rescue-pipeline-staging.marceloetcheverry990.workers.dev",
+				"CORS_ALLOWED_ORIGINS": "https://lead-rescue-pipeline-staging.marceloetcheverry990.workers.dev,http://localhost:8787,http://127.0.0.1:8787",
+				"OPENAI_ENRICH_ENABLED": "false",
+				"MONITORING_ENABLED": "true",
+				"MONITORING_ERROR_TRACKING": "true",
+				"MONITORING_METRICS": "true",
+				"MONITORING_ALERTING": "true",
+				"MONITORING_SAMPLE_RATE": "0.1",
+				"MONITORING_USERNAME": "admin",
+				"MONITORING_TENANT_ID": "empresa_base"
+			},
+			"queues": {
+				"producers": [
+					{
+						"binding": "MAIN_QUEUE",
+						"queue": "leads-ingestion-queue-staging"
+					},
+					{
+						"binding": "ENRICHMENT_QUEUE",
+						"queue": "leads-enrichment-queue-staging"
+					},
+					{
+						"binding": "DELIVERY_QUEUE",
+						"queue": "leads-delivery-queue-staging"
+					}
+				],
+				"consumers": [
+					{
+						"queue": "leads-ingestion-queue-staging",
+						"max_batch_size": 50,
+						"max_batch_timeout": 5,
+						"max_retries": 1
+					},
+					{
+						"queue": "leads-enrichment-queue-staging",
+						"max_batch_size": 50,
+						"max_batch_timeout": 5,
+						"max_retries": 1
+					},
+					{
+						"queue": "leads-delivery-queue-staging",
+						"max_batch_size": 50,
+						"max_batch_timeout": 5,
+						"max_retries": 1
+					}
+				]
+			},
+			"hyperdrive": [
+				{
+					"binding": "HYPERDRIVE",
+					"id": "8390e963773c4f8e82886e7da7358f70"
+				}
+			],
+			"r2_buckets": [
+				{
+					"bucket_name": "chat-photos",
+					"binding": "chat_photos",
+					"remote": true
+				}
+			],
+			"kv_namespaces": [
+				{
+					"binding": "DRIVER_REVOKED_JTI",
+					"id": "6ee132b2ac2548bebd5dfae76dc65003"
+				}
+			]
+		}
+	}
+}

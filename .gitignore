@@ -1,0 +1,36 @@
+# Dependencias
+**/node_modules/
+
+# Credenciales y configuración local
+**/.env
+**/.env.*
+!**/.env.example
+**/.dev.vars*
+!**/.dev.vars.example
+.kiro/settings/
+.kiro/hooks/
+
+# Salidas generadas
+**/.expo/
+**/.wrangler/
+**/dist/
+**/dist-check*/
+**/coverage/
+**/.cache/
+**/*.tsbuildinfo
+
+# Artefactos locales y respaldos
+*.log
+*.dump
+*.dump.enc
+*.backup
+*.key.dpapi
+
+# Sistema operativo y editores
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp
+
+# Volcados de código locales
+proyecto_completo.txt

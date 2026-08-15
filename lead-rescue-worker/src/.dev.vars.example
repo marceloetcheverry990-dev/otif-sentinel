@@ -1,0 +1,47 @@
+# .dev.vars.example
+# Copiá este archivo a .dev.vars para desarrollo local.
+# .dev.vars está en .gitignore — nunca subas valores reales al repo.
+#
+# ─── Secretos de producción ────────────────────────────────────────────────────
+# Los secretos de producción NO van en este archivo ni en wrangler.jsonc vars.
+# Configurarlos con:
+#   wrangler secret put JWT_SECRET
+#   wrangler secret put OPENAI_API_KEY
+#   wrangler secret put META_APP_SECRET
+#   wrangler secret put SUPABASE_URL
+#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+
+# JWT para firma de tokens de chofer (HMAC-SHA256)
+# Requisito mínimo: 32 bytes (256 bits). Generar con:
+#   openssl rand -base64 32
+# En producción: wrangler secret put JWT_SECRET
+JWT_SECRET="reemplazar-con-string-aleatorio-de-32-bytes-minimo"
+
+# OpenAI
+OPENAI_API_KEY="sk-proj-..."
+
+# Meta / WhatsApp
+META_APP_SECRET="..."
+
+# Ingestión genérica de órdenes (POST /api/webhooks/orders)
+# Mismo valor que: wrangler secret put ORDER_INGEST_SECRET
+ORDER_INGEST_SECRET="reemplazar-con-string-aleatorio-de-32-bytes-minimo"
+
+# Webhooks por plataforma (opcionales; si faltan, usan ORDER_INGEST_SECRET)
+# SHOPIFY_WEBHOOK_SECRET="..."
+# WOOCOMMERCE_WEBHOOK_SECRET="..."
+# SAP_WEBHOOK_SECRET="..."
+# NETSUITE_WEBHOOK_SECRET="..."
+# POS_WEBHOOK_SECRET="..."
+# PLATFORM_WEBHOOK_SECRETS={"shopify:empresa_base":"...","sap:empresa_base":"..."}
+
+# Supabase
+SUPABASE_URL="https://<project>.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY="eyJ..."
+
+# Customer notifications (optional; skipped if unset)
+# TWILIO_ACCOUNT_SID="ACxxxxxxxx"
+# TWILIO_AUTH_TOKEN="..."
+# TWILIO_FROM_NUMBER="+15551234567"
+# RESEND_API_KEY="re_xxxxxxxx"
+# RESEND_FROM_EMAIL="notificaciones@tu-dominio.com"

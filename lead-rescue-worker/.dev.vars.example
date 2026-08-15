@@ -1,0 +1,51 @@
+# Copy this file to .dev.vars and replace every placeholder locally.
+# Never commit .dev.vars or real credentials.
+
+OPENAI_API_KEY=replace_me
+META_APP_SECRET=replace_me
+META_PAGE_TOKEN=replace_me
+META_VERIFY_TOKEN=replace_me
+MAPBOX_TOKEN=replace_me
+
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=replace_me
+SUPABASE_SERVICE_ROLE_KEY=replace_me
+
+JWT_SECRET=generate_at_least_32_random_bytes
+DASHBOARD_SECRET=generate_a_different_32_byte_secret
+MONITORING_PASSWORD=generate_a_unique_strong_password
+
+# Optional: dedicated pepper for driver PIN hashes (falls back to JWT_SECRET)
+PIN_PEPPER=generate_another_32_byte_secret
+
+# Optional: when set, /api/choferes/activate requires matching invite_code in the body
+# CHOFER_INVITE_CODE=temporary-shared-activation-code
+
+# Optional CSV host allowlist for syncExcel (comma-separated). If unset, any HTTPS non-private host is allowed.
+# SYNC_CSV_ALLOWED_HOSTS=docs.google.com,drive.google.com
+
+# Guías de despacho Res. 154 (DTE). Preferir tenant_settings.dte_* por tenant.
+# DTE_PROVIDER=stub|simpleapi|lioren
+# DTE_AMBIENTE=certificacion|produccion
+# DTE_ALLOW_STUB=true
+# DTE_ALLOW_GLOBAL_IDENTITY=true   # solo single-tenant/dev; en multi-tenant NO usar
+# ENVIRONMENT=development
+# DTE_TOKEN_ENCRYPTION_KEY=generate_32+_chars_or_reuse_dashboard_secret
+# SIMPLEAPI_TOKEN=replace_me
+# SIMPLEAPI_BASE_URL=https://api.simpleapi.cl
+# SIMPLEAPI_GUIA_PATH=/api/dte/guia-despacho
+# SIMPLEAPI_LOOKUP_PATH=/api/dte/guia-despacho/by-ref
+# DTE_RUT_EMISOR=76.XXXXXX-X
+# DTE_RAZON_SOCIAL=Tu Distribuidora SpA
+
+
+
+# Customer notifications (optional; skipped if unset)
+# TWILIO_ACCOUNT_SID=ACxxxxxxxx
+# TWILIO_AUTH_TOKEN=replace_me
+# TWILIO_FROM_NUMBER=+15551234567
+# RESEND_API_KEY=re_xxxxxxxx
+# RESEND_FROM_EMAIL=notificaciones@tu-dominio.com
+
+# Hyperdrive local development is configured in the shell, not in this file:
+# CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=postgresql://user:password@host:5432/database?sslmode=require
