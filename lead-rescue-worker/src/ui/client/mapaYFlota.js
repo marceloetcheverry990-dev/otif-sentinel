@@ -25,7 +25,8 @@ export const MAPA_FLOTA_SCRIPT = `
             
             layerViajeActivo.addTo(map);
 
-            const layerBacklog = L.featureGroup().addTo(map);
+            // Backlog: capa lista, visible solo en pestaña Backlog (evita mapa colapsado)
+            const layerBacklog = L.featureGroup();
             window._backlogLayer = layerBacklog;
             
             ordenesData.filter(o => o.estado_operacional === CONFIG.ESTADOS.PENDIENTE).forEach(o => {
@@ -41,6 +42,21 @@ export const MAPA_FLOTA_SCRIPT = `
           } catch (e) {
             console.error("[DEFENSIVO] Error inicializando el mapa base:", e);
           }
+        }
+
+        function syncBacklogLayerVisibility() {
+          if (!map || !window._backlogLayer) return;
+          const show = appState.activeTab === 'panel-backlog';
+          const onMap = map.hasLayer(window._backlogLayer);
+          if (show && !onMap) window._backlogLayer.addTo(map);
+          if (!show && onMap) map.removeLayer(window._backlogLayer);
+        }
+
+        function clearTruckMarkers() {
+          Object.keys(truckMarkers).forEach(function(id) {
+            try { map.removeLayer(truckMarkers[id]); } catch (_) { /* ignore */ }
+            delete truckMarkers[id];
+          });
         }
 
         async function dibujarRutaEnMapa(safeTripId) {
@@ -294,17 +310,25 @@ export const MAPA_FLOTA_SCRIPT = `
         }
         async function rastrearFlotaEnVivo() {
           try {
+            // Solo pintar el camión de la ruta abierta — con N camiones el mapa se colapsa
+            const focusedTrip = appState.activeTripId ? String(appState.activeTripId) : null;
+            if (!focusedTrip) {
+              clearTruckMarkers();
+              return;
+            }
+
             const res = await fetch('/api/gps/live?tenant_id=' + encodeURIComponent(window._TENANT_ID || 'empresa_base'));
             if (!res.ok) return;
             const data = await res.json();
             
             if (data.exito && data.flota) {
-              const tripsActivos = new Set(); // [ARREGLO: GARBAGE COLLECTOR]
+              const tripsActivos = new Set();
               
               data.flota.forEach(camion => {
                 const { trip_id, lat, lng, velocidad } = camion;
+                if (String(trip_id) !== focusedTrip) return;
                 if (lat == null || lng == null || isNaN(Number(lat)) || isNaN(Number(lng))) return;
-                tripsActivos.add(String(trip_id)); // Marcamos el viaje como vivo
+                tripsActivos.add(String(trip_id));
                 const popupHTML = '<div style="font-family:Inter; text-align:center;"><b>Viaje: ' + trip_id + '</b><br><span style="color:var(--text-muted); font-size:0.8rem;">Velocidad: ' + velocidad + ' km/h</span></div>';
                 if (truckMarkers[trip_id]) {
                   truckMarkers[trip_id].setLatLng([lat, lng]);
@@ -318,9 +342,9 @@ export const MAPA_FLOTA_SCRIPT = `
                 }
               });
               Object.keys(truckMarkers).forEach(savedTripId => {
-                if (!tripsActivos.has(savedTripId)) {
-                  map.removeLayer(truckMarkers[savedTripId]); // Quitar del DOM (Leaflet)
-                  delete truckMarkers[savedTripId];           // Quitar de la memoria (JS)
+                if (!tripsActivos.has(String(savedTripId)) || String(savedTripId) !== focusedTrip) {
+                  map.removeLayer(truckMarkers[savedTripId]);
+                  delete truckMarkers[savedTripId];
                 }
               });
             }

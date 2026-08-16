@@ -417,6 +417,8 @@ export const POLLING_EVENTOS_SCRIPT = `
             
             document.getElementById('search-container').style.display = valor === 'panel-flota' ? 'block' : 'none';
             if(valor === 'panel-backlog') appState.activeTripId = null;
+            if (typeof syncBacklogLayerVisibility === 'function') syncBacklogLayerVisibility();
+            if (typeof rastrearFlotaEnVivo === 'function') rastrearFlotaEnVivo();
           }
 
           if (propiedad === 'activeTripId') {
@@ -431,6 +433,8 @@ export const POLLING_EVENTOS_SCRIPT = `
               }
             });
             dibujarRutaEnMapa(valor);
+            if (typeof syncBacklogLayerVisibility === 'function') syncBacklogLayerVisibility();
+            if (typeof rastrearFlotaEnVivo === 'function') rastrearFlotaEnVivo();
           }
 
           if (propiedad === 'searchTerm') {
