@@ -253,20 +253,23 @@ export const POLLING_EVENTOS_SCRIPT = `
               var badgeLabel = isEntregado ? 'ENTREGADO' : (isRechazado ? 'RECHAZADO' : (isEnSitio ? enSitioLabel : safeStr(p.estado_operacional || p.estado || 'PENDIENTE')));
 
               // Badge guía Res. 154 (STUB ≠ OK — no bloquea reemisión real)
+              // Nota: este archivo es template literal; para emitir \' en el JS final usar \\'
               var guiaHtml = '';
               var ge = String(p.guia_estado || '').toUpperCase();
+              var guiaTripAttr = safeStr(v.trip_id).replace(/'/g, '');
+              var guiaRetryClick = 'event.stopPropagation();window.retryGuiaTrip&&window.retryGuiaTrip(\\'' + guiaTripAttr + '\\')';
               if (ge === 'EMITIDA') {
-                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Gu&#237;a OK</div>';
+                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Guía OK</div>';
               } else if (ge === 'SKIPPED' && p.guia_folio && String(p.guia_folio).indexOf('STUB-') !== 0) {
-                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Gu&#237;a OK</div>';
+                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Guía OK</div>';
               } else if (ge === 'STUB' || (ge === 'SKIPPED' && (!p.guia_folio || String(p.guia_folio).indexOf('STUB-') === 0))) {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="Stub — sin DTE real. Clic para reintentar" onclick="event.stopPropagation();window.retryGuiaTrip &amp;&amp; window.retryGuiaTrip(\'' + safeStr(v.trip_id).replace(/'/g, '') + '\')">Gu&#237;a STUB</div>';
+                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="Stub — sin DTE real. Clic para reintentar" onclick="' + guiaRetryClick + '">Guía STUB</div>';
               } else if (ge === 'REVIEW') {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Confirmar hora de emisi\u00f3n') + '" onclick="event.stopPropagation();window.retryGuiaTrip &amp;&amp; window.retryGuiaTrip(\'' + safeStr(v.trip_id).replace(/'/g, '') + '\')">Gu&#237;a REV</div>';
+                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Confirmar hora de emisión') + '" onclick="' + guiaRetryClick + '">Guía REV</div>';
               } else if (ge === 'ERROR') {
-                guiaHtml = '<div class="badge b-red" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Error') + '" onclick="event.stopPropagation();window.retryGuiaTrip &amp;&amp; window.retryGuiaTrip(\'' + safeStr(v.trip_id).replace(/'/g, '') + '\')">Gu&#237;a ERR</div>';
+                guiaHtml = '<div class="badge b-red" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Error') + '" onclick="' + guiaRetryClick + '">Guía ERR</div>';
               } else if (ge === 'PENDING' || ge === 'EMITTING') {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;">Gu&#237;a…</div>';
+                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;">Guía…</div>';
               }
               var hrefDoc = safeHref(p.uri);
               var docBtn = hrefDoc
