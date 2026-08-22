@@ -6,6 +6,11 @@ import { verifyOperatorToken } from '../helpers/operator-auth.js';
 import { shouldSampleTrail } from '../helpers/gps-trail.js';
 import { resolveGpsEventTime } from '../helpers/gps-timestamp.js';
 import { maybeAutoLlegada } from '../helpers/auto-llegada.js';
+import {
+  getLiveFleetCacheEntry,
+  setLiveFleetCacheEntry,
+  invalidateTowerPoll,
+} from '../helpers/tower-poll-cache.js';
 
 const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...CORS_HEADERS });
 const LR = () => CONFIG.LEAD_RESCUE || {};
@@ -283,6 +288,10 @@ export async function handleGPSPing(request, env, ctx) {
         }
       }
 
+      if (autoLlegada?.triggered) {
+        invalidateTowerPoll(tenant_id);
+      }
+
       return new Response(JSON.stringify({
         exito: true,
         km_actuales: Number((kmPrevios + kmDelta).toFixed(4)),
@@ -300,16 +309,19 @@ export async function handleGPSPing(request, env, ctx) {
   }
 }
 
-export async function getLiveFleet(request, env) {
+export async function getLiveFleet(request, env, _ctx = null, operator = null) {
   if (request.method !== 'GET') {
     return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405, headers: jsonHeaders() });
   }
 
-  const auth = await verifyOperatorToken(request, env);
-  if (!auth.ok) return auth.response;
+  let tenant_id = operator?.tenant_id || null;
+  if (!tenant_id) {
+    const auth = await verifyOperatorToken(request, env);
+    if (!auth.ok) return auth.response;
+    tenant_id = auth.payload.tenant_id;
+  }
 
   const url = new URL(request.url);
-  const tenant_id = auth.payload.tenant_id;
   const requestedTenant = url.searchParams.get('tenant_id');
 
   const tenantError = requireTenantId(tenant_id);
@@ -319,6 +331,15 @@ export async function getLiveFleet(request, env) {
       JSON.stringify({ error: 'Tenant no autorizado', code: 'tenant_incorrecto' }),
       { status: 403, headers: jsonHeaders() },
     );
+  }
+
+  const cacheKey = String(tenant_id);
+  const cached = getLiveFleetCacheEntry(cacheKey);
+  if (cached) {
+    return new Response(cached.body, {
+      status: 200,
+      headers: { ...jsonHeaders(), 'X-Poll-Cache': 'HIT' },
+    });
   }
 
   try {
@@ -331,9 +352,11 @@ export async function getLiveFleet(request, env) {
         [tenant_id]
       );
 
-      return new Response(JSON.stringify({ exito: true, flota: rows }), {
+      const body = JSON.stringify({ exito: true, flota: rows });
+      setLiveFleetCacheEntry(cacheKey, body);
+      return new Response(body, {
         status: 200,
-        headers: jsonHeaders()
+        headers: { ...jsonHeaders(), 'X-Poll-Cache': 'MISS' }
       });
     }, { tenantId: tenant_id });
   } catch (err) {

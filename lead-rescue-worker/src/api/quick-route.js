@@ -10,6 +10,10 @@ import { resolveDepot, depotToSolver } from '../helpers/depots.js';
 import { DEFAULT_DEPOT } from '../helpers/vrp-solver.js';
 import { computeScanToken } from '../helpers/scan-token.js';
 import { fitsCapacity, normalizeTags } from '../helpers/cargo-constraints.js';
+import { resolveSlaFromTimeOfDay } from '../helpers/santiago-time.js';
+import { parseFlotaDisponible } from '../helpers/optimizer-flota.js';
+import { optimizarRutas } from './optimizer.js';
+import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 
 async function resolveOperatorTenant(request, env, operator = null) {
   if (operator?.tenant_id) {
@@ -130,9 +134,12 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
     const { chofer_id, camion_listo, descripcion_carga, paradas } = body;
     const depotRow = await resolveDepot(env, tenant_id, body.depot_id || null);
     const depot = depotToSolver(depotRow);
+    const flotaCheck = parseFlotaDisponible(body.flota_disponible);
+    const flotaDisponible = flotaCheck.ok ? flotaCheck.value : 1;
+    const splitFleet = flotaDisponible >= 2 && !chofer_id;
 
-    if (!chofer_id) {
-      return new Response(JSON.stringify({ error: 'Debe seleccionar un chofer' }), {
+    if (!chofer_id && !splitFleet) {
+      return new Response(JSON.stringify({ error: 'Debe seleccionar un chofer (o usar N° de camiones ≥ 2 en el header para partir la flota)' }), {
         status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS }
       });
     }
@@ -228,6 +235,130 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
       });
     }
 
+    if (splitFleet) {
+      const now = new Date();
+      const dateStr = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Santiago',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(now).replace(/-/g, '');
+      const batch = (globalThis.crypto?.randomUUID?.() || `${Date.now()}`).replace(/-/g, '').slice(0, 8).toUpperCase();
+
+      await withDbTransaction(env, async (client) => {
+        for (let i = 0; i < paradasOrdenadas.length; i++) {
+          const parada = paradasOrdenadas[i];
+          const coords = coordenadasOrdenadas[i];
+          const otId = `RR-${dateStr}-${batch}-${String(i + 1).padStart(2, '0')}`;
+          const slaIsoFromClock =
+            resolveSlaFromTimeOfDay(parada.sla_hora || parada.hora_limite_sla, now)
+            || (parada.fecha_hora_sla ? new Date(parada.fecha_hora_sla).toISOString() : null);
+          const slaDateIso = slaIsoFromClock || resolveSlaFromTimeOfDay('18:00', now);
+          const ventanaInicioIso = parada.ventana_inicio
+            ? (String(parada.ventana_inicio).includes('T')
+              ? parada.ventana_inicio
+              : resolveSlaFromTimeOfDay(parada.ventana_inicio, now))
+            : null;
+          const tagsReq = normalizeTags(parada.tags || parada.tags_requeridos || []);
+          const pesoKg = Number(parada.peso_kg || parada.peso || 0) || 0;
+          const volumen = Number(parada.volumen || 1) || 1;
+          const metadata = {
+            origen: 'RUTA_RAPIDA',
+            descripcion_carga: descripcion_carga || '',
+            descripcion_parada: parada.descripcion || '',
+            telefono_contacto: parada.telefono || null,
+            email_contacto: parada.email || null,
+            creado_en: now.toISOString(),
+            direccion_entrega: parada.direccion || null,
+            lat_destino: coords?.lat || null,
+            lng_destino: coords?.lng || null,
+            tags_requeridos: tagsReq,
+            split_fleet: true,
+            tipo_traslado: 'VENTA',
+            cliente_rut: parada.cliente_rut || parada.rut || null,
+          };
+          const insertAttempts = [
+            {
+              sql: `INSERT INTO ordenes_pendientes (
+                ot_id, cliente, estado_operacional, valor_oc_clp, monto_total,
+                fecha_hora_sla, metadata, tenant_id, lat, lng, peso_kg, volumen,
+                ventana_inicio, ventana_fin, tags_requeridos
+              ) VALUES ($1,$2,'PENDIENTE_RUTEO',$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
+              params: [
+                otId, parada.cliente.trim(), parada.monto || 0, slaDateIso,
+                JSON.stringify(metadata), tenant_id, coords?.lat || null, coords?.lng || null,
+                pesoKg, volumen, ventanaInicioIso, slaDateIso, JSON.stringify(tagsReq),
+              ],
+            },
+            {
+              sql: `INSERT INTO ordenes_pendientes (
+                ot_id, cliente, estado_operacional, valor_oc_clp, monto_total,
+                fecha_hora_sla, metadata, tenant_id, lat, lng, tags_requeridos
+              ) VALUES ($1,$2,'PENDIENTE_RUTEO',$3,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+              params: [
+                otId, parada.cliente.trim(), parada.monto || 0, slaDateIso,
+                JSON.stringify(metadata), tenant_id, coords?.lat || null, coords?.lng || null,
+                JSON.stringify(tagsReq),
+              ],
+            },
+          ];
+          let ok = false;
+          for (const attempt of insertAttempts) {
+            const sp = `sp_rr_${i}_${Math.random().toString(36).slice(2, 6)}`;
+            try {
+              await client.query(`SAVEPOINT ${sp}`);
+              await client.query(attempt.sql, attempt.params);
+              await client.query(`RELEASE SAVEPOINT ${sp}`);
+              ok = true;
+              break;
+            } catch (insErr) {
+              try { await client.query(`ROLLBACK TO SAVEPOINT ${sp}`); } catch (_) { /* ignore */ }
+              const schemaGap = /column .* does not exist|42703/i.test(String(insErr.message || ''))
+                || insErr.code === '42703';
+              if (!schemaGap) throw insErr;
+            }
+          }
+          if (!ok) throw new Error('No se pudo insertar la parada ' + (i + 1));
+        }
+      }, { tenantId: tenant_id });
+
+      const optReq = new Request('https://internal/api/optimizar-rutas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenant_id,
+          perfil_id: body.perfil_id || 1,
+          flota_disponible: flotaDisponible,
+          clima: body.clima || 'NORMAL',
+          depot_id: body.depot_id || null,
+          is_simulacion: false,
+        }),
+      });
+      const optRes = await optimizarRutas(optReq, env, ctx, operator);
+      const optData = await optRes.json().catch(() => ({}));
+      if (!optRes.ok || optData.exito === false) {
+        return new Response(JSON.stringify({
+          error: optData.msg || optData.error || 'No se pudo ruteo con 3 camiones',
+          detalle: optData,
+        }), {
+          status: optRes.status || 500,
+          headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+        });
+      }
+      return new Response(JSON.stringify({
+        exito: true,
+        split_fleet: true,
+        viajes_creados: optData.viajes_creados || 0,
+        paradas_creadas: paradasOrdenadas.length,
+        chofer: `${optData.viajes_creados || 0} camiones (equilibrado)`,
+        trip_id: (optData.viajes || optData.trips || []).map((v) => v.trip_id).filter(Boolean).join(', ') || 'varios',
+        km_totales: optData.km_totales || optData.kmEstimado || null,
+        costo_operativo: optData.costo_operativo || null,
+        mensaje: `Se armaron ${optData.viajes_creados || 0} viajes con ${paradasOrdenadas.length} paradas (N° camiones = ${flotaDisponible}).`,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
     let chofer, tripId, otIds, paradasGuardadas, estadoInicial;
 
     await withDbTransaction(env, async (client) => {
@@ -312,13 +443,19 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
         const otId = `${tripId}-${String(i + 1).padStart(2, '0')}`;
         otIds.push(otId);
 
-        const slaHoras = parada.sla_horas || 8;
-        const slaDate = new Date(now.getTime() + slaHoras * 60 * 60 * 1000);
+        const slaIsoFromClock =
+          resolveSlaFromTimeOfDay(parada.sla_hora || parada.hora_limite_sla, now)
+          || (parada.fecha_hora_sla ? new Date(parada.fecha_hora_sla).toISOString() : null);
+        const slaHorasLegacy = Number(parada.sla_horas);
+        const slaDateIso = slaIsoFromClock
+          || (Number.isFinite(slaHorasLegacy) && slaHorasLegacy > 0
+            ? new Date(now.getTime() + slaHorasLegacy * 60 * 60 * 1000).toISOString()
+            : resolveSlaFromTimeOfDay('18:00', now));
 
         const scanTok = await computeScanToken(tenant_id, otId, env);
         const pesoKg = Number(parada.peso_kg || parada.peso || 0) || 0;
         const ventanaInicio = parada.ventana_inicio || null;
-        const ventanaFin = parada.ventana_fin || null;
+        const ventanaFin = parada.ventana_fin || slaDateIso || null;
         const tagsReq = normalizeTags(parada.tags || parada.tags_requeridos || []);
         const metadata = {
           origen: 'RUTA_RAPIDA',
@@ -334,6 +471,10 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
           geocode_precision: coords?.precision || null,
           geocode_provider: coords?.provider || null,
           tags_requeridos: tagsReq,
+          tipo_traslado: parada.tipo_traslado || 'VENTA',
+          cliente_rut: parada.cliente_rut || parada.rut || null,
+          // Demo / video: entrega sin foto/firma/QR (POD completo queda para Excel/tenant).
+          pod_requirements: { foto: false, firma: false, scan: false, notas: false },
           routing: {
             distancia_total_viaje_km: kmPlan,
             costo_operacional: costoPlan,
@@ -348,7 +489,7 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
           estadoInicial,
           parada.monto || 0,
           parada.monto || null,
-          slaDate.toISOString(),
+          slaDateIso,
           JSON.stringify(metadata),
           tripId,
           i + 1,
@@ -464,7 +605,7 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
           monto: parada.monto || null,
           descripcion: parada.descripcion || null,
           telefono: parada.telefono || null,
-          sla: slaDate.toISOString(),
+          sla: slaDateIso,
           geocodificado: coords !== null
         });
       }
@@ -516,6 +657,8 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
     const rutaOptimizada = paradasGuardadas.map((p, i) => ({
       stop: i + 1, ot_id: p.ot_id, cliente: p.cliente, lat: p.lat, lng: p.lng,
     }));
+
+    invalidateTowerPoll(tenant_id);
 
     return new Response(JSON.stringify({
       exito: true,

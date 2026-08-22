@@ -1,0 +1,34 @@
+{
+  "cli": {
+    "version": ">= 16.16.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview-staging": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lead-rescue-pipeline-staging.marceloetcheverry990.workers.dev"
+      }
+    },
+    "preview-production": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lead-rescue-pipeline.marceloetcheverry990.workers.dev"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lead-rescue-pipeline.marceloetcheverry990.workers.dev"
+      }
+    }
+  }
+}

@@ -29,7 +29,14 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -52,6 +59,12 @@
           "barcodeScannerEnabled": true
         }
       ]
-    ]    
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "dfb2c8dd-7c93-41f1-85b9-476635c0e9db"
+      }
+    },
+    "owner": "marceloche18"
   }
 }

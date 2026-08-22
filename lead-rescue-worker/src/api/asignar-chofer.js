@@ -2,6 +2,7 @@
 // Asigna o desasigna chofer de un trip vía Hyperdrive.
 import { CORS_HEADERS, requireTenantId } from '../config.js';
 import { withDbTransaction } from '../db.js';
+import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -202,6 +203,20 @@ export async function handleAsignarChofer(request, env, operator = null) {
 
       let patente = chofer.patente_asignada || null;
       if (patente) {
+        // Unique(trip_id_actual): liberar el viaje de cualquier vehículo previo
+        // y liberar el vehículo del chofer si tenía otro trip.
+        await client.query(
+          `UPDATE flota_vehiculos
+           SET trip_id_actual = NULL,
+               estado = 'DISPONIBLE'
+           WHERE tenant_id = $1
+             AND (
+               trip_id_actual = $2
+               OR (patente = $3 AND trip_id_actual IS NOT NULL AND trip_id_actual <> $2)
+             )`,
+          [tenant_id, tripIdStr, patente]
+        );
+
         await client.query(
           `UPDATE flota_vehiculos
            SET trip_id_actual = $1,
@@ -237,6 +252,8 @@ export async function handleAsignarChofer(request, env, operator = null) {
         verificado: n > 0 && matchN === n,
       };
     }, { statementTimeout: 8000 });
+
+    invalidateTowerPoll(tenant_id);
 
     return json({
       exito: true,

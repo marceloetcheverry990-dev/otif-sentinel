@@ -25,6 +25,7 @@ PIN_PEPPER=generate_another_32_byte_secret
 # SYNC_CSV_ALLOWED_HOSTS=docs.google.com,drive.google.com
 
 # Guías de despacho Res. 154 (DTE). Preferir tenant_settings.dte_* por tenant.
+# Staging: DTE_ALLOW_STUB=true. Producción: ENVIRONMENT=production (stub prohibido).
 # DTE_PROVIDER=stub|simpleapi|lioren
 # DTE_AMBIENTE=certificacion|produccion
 # DTE_ALLOW_STUB=true
@@ -35,8 +36,15 @@ PIN_PEPPER=generate_another_32_byte_secret
 # SIMPLEAPI_BASE_URL=https://api.simpleapi.cl
 # SIMPLEAPI_GUIA_PATH=/api/dte/guia-despacho
 # SIMPLEAPI_LOOKUP_PATH=/api/dte/guia-despacho/by-ref
+# LIOREN_TOKEN=replace_me
+# LIOREN_BASE_URL=https://www.lioren.cl/api
+# LIOREN_DTE_PATH=/dtes
+# LIOREN_LOOKUP_PATH=/dtes
 # DTE_RUT_EMISOR=76.XXXXXX-X
 # DTE_RAZON_SOCIAL=Tu Distribuidora SpA
+
+# Staging DB (nunca la URI de producción). Usar con npm run provision:staging-db
+# STAGING_DATABASE_URL=postgresql://user:password@host:5432/postgres?sslmode=require
 
 
 

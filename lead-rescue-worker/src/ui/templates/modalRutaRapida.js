@@ -17,9 +17,9 @@ export const MODAL_RUTA_RAPIDA = `
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
             <div>
-              <label style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:6px;">Chofer *</label>
+              <label style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:6px;">Chofer (opcional)</label>
               <select id="rrChofer" style="width:100%;padding:10px;border:1px solid #334155;border-radius:8px;font-size:14px;background:#0f172a;color:#e2e8f0;">
-                <option value="">-- Seleccionar chofer --</option>
+                <option value="">-- Auto: usar N° de camiones del header --</option>
               </select>
             </div>
             <div>

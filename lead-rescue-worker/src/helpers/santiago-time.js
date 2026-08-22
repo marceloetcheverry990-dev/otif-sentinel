@@ -37,6 +37,59 @@ export function santiagoWallToUtcIso(year, monthIndex, day, hours = 0, minutes =
  * Normaliza strings de fecha del CSV operativo (DD/MM/YYYY [HH:mm]) a ISO UTC
  * interpretando la hora como America/Santiago.
  */
+/**
+ * Parsea "HH:mm" / "HH:mm:ss" (0–23:59).
+ * @returns {{ hours: number, minutes: number } | null}
+ */
+export function parseTimeOfDay(hhmm) {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(hhmm ?? '').trim());
+  if (!m) return null;
+  const hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return { hours, minutes };
+}
+
+/**
+ * Fecha/hora límite SLA para hoy en America/Santiago a partir de hora de pared.
+ * Si la hora ya pasó respecto a refDate, usa el día siguiente.
+ */
+export function resolveSlaFromTimeOfDay(hhmm, refDate = new Date()) {
+  const tod = parseTimeOfDay(hhmm);
+  if (!tod) return null;
+
+  const refMs = refDate instanceof Date ? refDate.getTime() : new Date(refDate).getTime();
+  if (!Number.isFinite(refMs)) return null;
+
+  const dayParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(refMs));
+
+  const get = (type) => Number(dayParts.find((p) => p.type === type)?.value);
+  const year = get('year');
+  const monthIndex = get('month') - 1;
+  const day = get('day');
+  if (![year, monthIndex, day].every(Number.isFinite)) return null;
+
+  let iso = santiagoWallToUtcIso(year, monthIndex, day, tod.hours, tod.minutes);
+  if (new Date(iso).getTime() <= refMs) {
+    const next = new Date(refMs + 24 * 60 * 60 * 1000);
+    const nextParts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Santiago',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(next);
+    const getN = (type) => Number(nextParts.find((p) => p.type === type)?.value);
+    iso = santiagoWallToUtcIso(getN('year'), getN('month') - 1, getN('day'), tod.hours, tod.minutes);
+  }
+  return iso;
+}
+
 export function normalizeSantiagoDate(val) {
   if (!val) return null;
   const dateStr = String(val).trim();

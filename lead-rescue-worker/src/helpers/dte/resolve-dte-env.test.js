@@ -64,4 +64,18 @@ describe('resolveDteEnv (R2/R4)', () => {
     expect(env.DTE_RUT_EMISOR).toBe('76.GLOBAL-1');
     expect(env.SIMPLEAPI_TOKEN).toBe('global');
   });
+
+  it('lioren usa dte_api_token del tenant como LIOREN_TOKEN', async () => {
+    const env = await resolveDteEnv(
+      { DTE_PROVIDER: 'lioren' },
+      {
+        dte_provider: 'lioren',
+        dte_rut_emisor: '76.TENANT-9',
+        dte_api_token: 'lioren-secret',
+      }
+    );
+    expect(env.DTE_IDENTITY_ERROR).toBeNull();
+    expect(env.LIOREN_TOKEN).toBe('lioren-secret');
+    expect(env.DTE_PROVIDER).toBe('lioren');
+  });
 });

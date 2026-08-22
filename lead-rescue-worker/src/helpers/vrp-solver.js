@@ -42,6 +42,61 @@ export function routeDistanceKm(stops, depot = DEFAULT_DEPOT) {
   return d;
 }
 
+function polarAngle(depot, stop) {
+  return Math.atan2(
+    Number(stop.lat) - Number(depot.lat),
+    Number(stop.lng) - Number(depot.lng),
+  );
+}
+
+/**
+ * Clarke-Wright solo fusiona; si cabe todo en 1 camión, maxVehicles no partía.
+ * Esto abre las rutas más largas hasta el N° pedido (tope: cantidad de paradas).
+ */
+export function splitUpToVehicles(routes, maxVehicles, depot = DEFAULT_DEPOT) {
+  const cap = Math.max(1, Math.floor(Number(maxVehicles) || 1));
+  let out = (routes || []).filter((r) => Array.isArray(r) && r.length).map((r) => [...r]);
+  if (!out.length) return [];
+  const total = out.reduce((s, r) => s + r.length, 0);
+  const target = Math.min(cap, total);
+  while (out.length < target) {
+    out.sort((a, b) => b.length - a.length);
+    const big = out[0];
+    if (!big || big.length < 2) break;
+    out.shift();
+    const ordered = [...big].sort((a, b) => polarAngle(depot, a) - polarAngle(depot, b));
+    const mid = Math.max(1, Math.min(ordered.length - 1, Math.ceil(ordered.length / 2)));
+    out.push(ordered.slice(0, mid), ordered.slice(mid));
+  }
+  return out.filter((r) => r.length);
+}
+
+/** Parte si hay de más camiones, junta si hay de menos, y no pierde paradas. */
+export function enforceVehicleCount(routes, maxVehicles, allStops, depot = DEFAULT_DEPOT) {
+  let out = splitUpToVehicles(routes, maxVehicles, depot);
+  const seen = new Set();
+  for (const r of out) {
+    for (const s of r) {
+      if (s && s.ot_id) seen.add(String(s.ot_id));
+    }
+  }
+  for (const s of allStops || []) {
+    const id = s && s.ot_id != null ? String(s.ot_id) : '';
+    if (!id || seen.has(id)) continue;
+    if (!out.length) out = [[s]];
+    else out[0].push(s);
+    seen.add(id);
+  }
+  const cap = Math.max(1, Math.floor(Number(maxVehicles) || 1));
+  while (out.length > cap && out.length > 1) {
+    out.sort((a, b) => a.length - b.length);
+    const a = out.shift();
+    const b = out.shift();
+    out.push([...(a || []), ...(b || [])]);
+  }
+  return out.filter((r) => r.length);
+}
+
 function routeVolume(stops) {
   return cargoRouteVolume(stops);
 }
@@ -71,7 +126,8 @@ export function stopWindowStartMs(o) {
 export function routeFeasibleTw(stops, startMs = Date.now(), velocidadKmH = 35, depot = DEFAULT_DEPOT) {
   if (!stops?.length) return { ok: true, arrivals: [] };
   const vel = Math.max(5, Number(velocidadKmH) || 35);
-  let t = startMs || Date.now();
+  const origin = Number.isFinite(startMs) ? startMs : Date.now();
+  let t = origin;
   let lat = depot.lat;
   let lng = depot.lng;
   const arrivals = [];
@@ -83,7 +139,8 @@ export function routeFeasibleTw(stops, startMs = Date.now(), velocidadKmH = 35, 
     const startW = stopWindowStartMs(o);
     if (startW != null && t < startW) t = startW; // wait
     const endW = stopWindowEndMs(o);
-    if (endW != null && t > endW + 1e-6) return { ok: false, arrivals };
+    // SLA ya vencido al despacho: se entrega igual; el costo blando lo prioriza.
+    if (endW != null && endW > origin && t > endW + 1e-6) return { ok: false, arrivals };
     arrivals.push(t);
     lat = o.lat;
     lng = o.lng;
@@ -99,16 +156,37 @@ function routeSegregationOk(stops) {
   return !(haz && food);
 }
 
+function numW(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Urgencia 0–20: más alto = hay que ir antes (SLA vencido o apretado). */
+export function slaUrgency(o, startMs) {
+  const endW = stopWindowEndMs(o) ?? new Date(o?.fecha_hora_sla || '2099-12-31').getTime();
+  if (!Number.isFinite(endW)) return 0;
+  const hoursLeft = (endW - startMs) / 3600000;
+  if (hoursLeft <= 0) return 8 + Math.min(12, -hoursLeft);
+  if (hoursLeft < 2) return 6;
+  if (hoursLeft < 6) return 2.5;
+  if (hoursLeft < 12) return 0.8;
+  return 0.15;
+}
+
 /**
- * Soft SLA cost: lower is better when early SLA stops are earlier in the route.
- * Only used as tie-break inside the feasible set.
+ * Costo de perfil: km + ir tarde en SLA/valor/riesgo.
+ * Los pesos 0 tienen que poder apagar un término (no usar `|| 1`).
  */
 function softSlaPenalty(stops, startMs, pesos = {}, velocidadKmH = 35) {
-  const w = Number(pesos.peso_sla) || 1;
-  if (!w || !stops.length) return 0;
+  if (!stops.length) return 0;
+  const wSla = numW(pesos.peso_sla, 1);
+  const wVal = numW(pesos.peso_valor_carga, 0);
+  const wRiesgo = numW(pesos.peso_riesgo_ia, 0);
   const vel = Math.max(5, Number(velocidadKmH) || 35);
+  const origin = startMs || Date.now();
+  const denom = Math.max(1, stops.length - 1);
   let pen = 0;
-  let t = startMs || Date.now();
+  let t = origin;
   let lat = stops[0]?.lat;
   let lng = stops[0]?.lng;
   for (let i = 0; i < stops.length; i++) {
@@ -118,17 +196,15 @@ function softSlaPenalty(stops, startMs, pesos = {}, velocidadKmH = 35) {
       t += (km / vel) * 3600000 + 5 * 60 * 1000;
     }
     const endW = stopWindowEndMs(o) ?? new Date(o.fecha_hora_sla || '2099-12-31').getTime();
-    if (t > endW) pen += ((t - endW) / 3600000) * 50 * w;
-    const wVal = Number(pesos.peso_valor_carga) || 0;
-    if (wVal > 0) {
-      const valor = Number(o.valor_oc_clp || 0) / 1e6;
-      pen += (i / Math.max(1, stops.length - 1)) * valor * 20 * wVal;
+    if (Number.isFinite(endW) && t > endW) {
+      pen += ((t - endW) / 3600000) * 40 * wSla;
     }
-    const wRiesgo = Number(pesos.peso_riesgo_ia) || 0;
-    if (wRiesgo > 0) {
-      const riesgo = Number(o.riesgo_score || o.risk_score || 0);
-      pen += (i / Math.max(1, stops.length - 1)) * (riesgo / 100) * 30 * wRiesgo;
-    }
+    const pos = i / denom;
+    pen += pos * slaUrgency(o, origin) * 18 * wSla;
+    const valorMillones = Number(o.valor_oc_clp || 0) / 1e6;
+    pen += pos * valorMillones * 80 * wVal;
+    const riesgo = Number(o.riesgo_score || o.risk_score || 0);
+    pen += pos * (riesgo / 100) * 55 * wRiesgo;
     lat = o.lat;
     lng = o.lng;
   }
@@ -136,7 +212,7 @@ function softSlaPenalty(stops, startMs, pesos = {}, velocidadKmH = 35) {
 }
 
 function routeCost(stops, depot, startMs, pesos, velocidadKmH = 35) {
-  const wDist = Number(pesos?.peso_distancia) || 1;
+  const wDist = numW(pesos?.peso_distancia, 1);
   return routeDistanceKm(stops, depot) * wDist + softSlaPenalty(stops, startMs, pesos, velocidadKmH);
 }
 
@@ -301,19 +377,17 @@ export function sequenceRoute(stops, {
     for (let i = 0; i < pending.length; i++) {
       const p = pending[i];
       const dist = calcularDistanciaKm(lat, lng, p.lat, p.lng);
-      const slaMs = stopWindowEndMs(p) ?? new Date(p.fecha_hora_sla || '2099-12-31').getTime();
-      const horas = (slaMs - startMs) / 3600000;
-      let urg = 0;
-      if (horas < 1) urg = 500;
-      else if (horas < 3) urg = 100;
-      else if (horas < 5) urg = 20;
-      const wDist = Number(pesos.peso_distancia) || 1;
-      const wSla = Number(pesos.peso_sla) || 1;
-      const valor =
-        Number(pesos.peso_valor_carga) > 0
-          ? -(Number(p.valor_oc_clp || 0) / 1e6) * Number(pesos.peso_valor_carga)
-          : 0;
-      const score = dist * wDist - urg * wSla + valor;
+      const wDist = numW(pesos.peso_distancia, 1);
+      const wSla = numW(pesos.peso_sla, 1);
+      const wVal = numW(pesos.peso_valor_carga, 0);
+      const wRiesgo = numW(pesos.peso_riesgo_ia, 0);
+      const valorMillones = Number(p.valor_oc_clp || 0) / 1e6;
+      const riesgo = Number(p.riesgo_score || p.risk_score || 0) / 100;
+      const score =
+        dist * wDist
+        - slaUrgency(p, startMs) * 12 * wSla
+        - valorMillones * 70 * wVal
+        - riesgo * 40 * wRiesgo;
       if (score < bestScore) {
         bestScore = score;
         bestIdx = i;
@@ -399,6 +473,8 @@ export function solveVrp(ordenes, {
     }
     rawRoutes = kept.slice(0, maxVehicles);
   }
+
+  rawRoutes = enforceVehicleCount(rawRoutes, maxVehicles, list, depot);
 
   const routes = rawRoutes.map((r) =>
     sequenceRoute(r, {
@@ -528,6 +604,7 @@ export function solveVrpLegacy(ordenes, opts = {}) {
       break;
     }
   }
+  clusters = enforceVehicleCount(clusters, maxVehicles, list, depot);
   const routes = clusters.map((c) => sequenceRoute(c, { depot, startMs, pesos, velocidadKmH }));
   const kmEstimado = routes.reduce((s, r) => s + routeDistanceKm(r, depot), 0);
   const score = routes.reduce(

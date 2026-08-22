@@ -18,6 +18,7 @@ import { renderLayout } from './templates/layout.js';
 import { renderAiWidget } from './templates/aiWidget.js';
 import { MODAL_RUTA_RAPIDA } from './templates/modalRutaRapida.js';
 import { MODAL_EDITAR_DIRECCION } from './templates/modalEditarDireccion.js';
+import { MODAL_RECALCULAR_RUTEO } from './templates/modalRecalcularRuteo.js';
 
 import { TELEMETRY_CHAT_SCRIPT } from './client/telemetriaYChat.js';
 import { MAPA_FLOTA_SCRIPT } from './client/mapaYFlota.js';
@@ -52,17 +53,18 @@ export function renderControlTowerDashboard(
   // --- Órdenes pendientes (sin viaje asignado) ---
   const ordenesPendientes = ordenesSeguras.filter(o =>
     (!o.trip_id || o.trip_id === '') &&
-    (o.estado_operacional === APP_CONFIG.ESTADOS.PENDIENTE ||
-     o.estado_operacional === 'PENDIENTE_RUTEO')
-  );
+    (
+      o.estado_operacional === APP_CONFIG.ESTADOS.PENDIENTE ||
+      o.estado_operacional === 'PENDIENTE_RUTEO' ||
+      o.estado_operacional === 'PENDIENTE_CARGA'
+    )
+  ).sort((a, b) => String(a.ot_id || '').localeCompare(String(b.ot_id || ''), 'es', { numeric: true }));
 
   // --- Cálculos financieros y SLA ---
-  const { riesgosSla, totalDineroEnCalle, totalDineroRiesgo } =
+  const { riesgosSla, totalDineroEnCalle, totalDineroRiesgo, totalParadasAbiertas } =
     calcularRiesgosSla(viajesSeguros);
 
-  const totalParadas = viajesSeguros.reduce(
-    (acc, v) => acc + Number(v.total_paradas || 0), 0
-  );
+  const totalParadas = totalParadasAbiertas || 0;
   const otifProyectado = totalParadas > 0
     ? Math.max(0, Math.round(((totalParadas - riesgosSla.length) / totalParadas) * 100))
     : 100;
@@ -78,6 +80,7 @@ export function renderControlTowerDashboard(
     tenant_id: tenantId,
     operator: operatorSession || null,
     depots: depotsSeguros,
+    dte_live: !!(depotOpts && depotOpts.dte_live),
   };
   const { safeOrdenesJson, safeViajesJson, safeConfigJson, rawChoferesJson } =
     buildJsonBlobs(ordenesSeguras, viajesSeguros, runtimeConfig, listaChoferes, lastSyncDate);
@@ -165,6 +168,8 @@ ${bodyHtml}
       ${MODAL_RUTA_RAPIDA.trim()}
 
       ${MODAL_EDITAR_DIRECCION.trim()}
+
+      ${MODAL_RECALCULAR_RUTEO.trim()}
 
     </body>
     </html>

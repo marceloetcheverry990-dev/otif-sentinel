@@ -4,9 +4,325 @@
  */
 import { CORS_HEADERS, jsonResponse, requireTenantId } from '../config.js';
 import { withDb } from '../db.js';
-import { signDriverToken } from '../helpers/driver-auth.js';
+import { signDriverToken, verifyDriverToken } from '../helpers/driver-auth.js';
 import { processCustomerNotificationOutbox, enqueueCustomerNotify } from '../helpers/customer-notify.js';
 import { isEncryptedSecret, sealSecret } from '../helpers/dte/secret-at-rest.js';
+import { resolveSlaFromTimeOfDay } from '../helpers/santiago-time.js';
+
+const VIDEO_DEMO_STOPS = [
+  {
+    seq: 1, ot_id: 'OT-1001', cliente: 'Starken CORPROA',
+    cliente_rut: '96.791.430-3',
+    direccion: 'Av. Pedro Aguirre Cerda 4296, Cerrillos, Región Metropolitana, Chile',
+    lat: -33.4799955, lng: -70.6922008, sla_hora: '15:00', ventana_inicio: '14:00',
+    monto: 2500000, peso_kg: 800, volumen: 3.5, tags: ['ALIMENTOS'],
+    descripcion: 'Cajas refrigeradas — no mezclar con química',
+    telefono: '+56 2 2345 1001', email: 'logistica@starken-demo.cl',
+  },
+  {
+    seq: 2, ot_id: 'OT-1002', cliente: 'Universidad de Santiago',
+    cliente_rut: '60.911.000-7',
+    direccion: 'Las Sophoras 135, Estación Central, Región Metropolitana, Chile',
+    lat: -33.4482286, lng: -70.6829428, sla_hora: '17:00', ventana_inicio: '16:00',
+    monto: 1200000, peso_kg: 650, volumen: 3.0, tags: ['ALIMENTOS'],
+    descripcion: 'Insumos de casino / alimentos',
+    telefono: '+56 2 2718 1002', email: 'compras@usach-demo.cl',
+  },
+  {
+    seq: 3, ot_id: 'OT-1003', cliente: 'Químicos ANDES Ltda.',
+    cliente_rut: '76.123.890-K',
+    direccion: 'Atacama 3130, Santiago, Región Metropolitana, Chile',
+    lat: -33.4317552, lng: -70.6789279, sla_hora: '18:00', ventana_inicio: '17:00',
+    monto: 3200000, peso_kg: 700, volumen: 2.8, tags: ['PELIGROSO'],
+    descripcion: 'Solventes / carga peligrosa (HAZMAT)',
+    telefono: '+56 2 2555 1003', email: 'ehs@andes-demo.cl',
+  },
+  {
+    seq: 4, ot_id: 'OT-1004', cliente: 'Maqueta SUBURBANO SPA',
+    cliente_rut: '77.456.123-0',
+    direccion: 'Dr. Sótero del Río 326, Santiago, Región Metropolitana, Chile',
+    lat: -33.4396961, lng: -70.6545852, sla_hora: '18:30', ventana_inicio: '17:30',
+    monto: 2500000, peso_kg: 600, volumen: 2.5, tags: ['PELIGROSO'],
+    descripcion: 'Pinturas y thinner — segregación HAZMAT',
+    telefono: '+56 2 2666 1004', email: 'bodega@suburbano-demo.cl',
+  },
+  {
+    seq: 5, ot_id: 'OT-1005', cliente: 'Iplacex',
+    cliente_rut: '76.234.567-8',
+    direccion: 'Periodista José Carrasco Tapia 75, Santiago, Región Metropolitana, Chile',
+    lat: -33.4412198, lng: -70.6354291, sla_hora: '19:00', ventana_inicio: '18:00',
+    monto: 2500000, peso_kg: 400, volumen: 2.0, tags: [],
+    descripcion: 'Material de oficina (carga general)',
+    telefono: '+56 2 2777 1005', email: 'abastecimiento@iplacex-demo.cl',
+  },
+  {
+    seq: 6, ot_id: 'OT-1006', cliente: 'Universidad de Chile',
+    cliente_rut: '60.910.000-1',
+    direccion: 'Sta. Elena 962, Santiago, Región Metropolitana, Chile',
+    lat: -33.4541438, lng: -70.6316250, sla_hora: '19:30', ventana_inicio: '18:30',
+    monto: 1200000, peso_kg: 350, volumen: 1.8, tags: [],
+    descripcion: 'Equipos y papelería (carga general)',
+    telefono: '+56 2 2888 1006', email: 'compras@uchile-demo.cl',
+  },
+];
+
+export function getVideoRutaRapidaDraft() {
+  return {
+    descripcion_carga: 'Mixto: alimentos refrigerados + química peligrosa + general',
+    camion_listo: true,
+    paradas: VIDEO_DEMO_STOPS.map((s) => ({
+      cliente: s.cliente,
+      cliente_rut: s.cliente_rut || null,
+      direccion: s.direccion,
+      telefono: s.telefono,
+      email: s.email,
+      peso_kg: s.peso_kg,
+      volumen: s.volumen,
+      descripcion: s.descripcion,
+      monto: s.monto,
+      sla_hora: s.sla_hora,
+      ventana_inicio: s.ventana_inicio,
+      tags: s.tags,
+      lat: s.lat,
+      lng: s.lng,
+      precision: 'house',
+      tipo_traslado: 'VENTA',
+    })),
+  };
+}
+
+/** Identidad emisor DTE demo (staging) si el tenant aún no tiene dte_* configurado. */
+async function ensureDemoDteIdentity(client, tenant_id) {
+  try {
+    await client.query('SAVEPOINT sp_dte_identity');
+    await client.query(
+      `INSERT INTO tenant_settings (tenant_id, dte_provider, dte_rut_emisor, dte_razon_social, dte_ambiente)
+       VALUES ($1, 'stub', '76.543.210-K', 'Empresa Base Demo SpA', 'certificacion')
+       ON CONFLICT (tenant_id) DO UPDATE SET
+         dte_provider = COALESCE(NULLIF(TRIM(tenant_settings.dte_provider), ''), EXCLUDED.dte_provider),
+         dte_rut_emisor = COALESCE(NULLIF(TRIM(tenant_settings.dte_rut_emisor), ''), EXCLUDED.dte_rut_emisor),
+         dte_razon_social = COALESCE(NULLIF(TRIM(tenant_settings.dte_razon_social), ''), EXCLUDED.dte_razon_social),
+         dte_ambiente = COALESCE(NULLIF(TRIM(tenant_settings.dte_ambiente), ''), EXCLUDED.dte_ambiente)`,
+      [tenant_id]
+    );
+    await client.query('RELEASE SAVEPOINT sp_dte_identity');
+  } catch (e) {
+    try { await client.query('ROLLBACK TO SAVEPOINT sp_dte_identity'); } catch { /* ignore */ }
+    console.warn('[video-prep] ensureDemoDteIdentity', e.message);
+  }
+}
+
+async function ensureTresCamionesDemo(client, tenant_id) {
+  const result = { insert_error: null, n_disponible: 0, debug: {} };
+
+  await client.query(
+    `UPDATE choferes SET estado = 'DISPONIBLE' WHERE tenant_id = $1`,
+    [tenant_id]
+  );
+
+  try {
+    await client.query('SAVEPOINT sp_video_flota');
+    await client.query(
+      `INSERT INTO flota_vehiculos
+         (tenant_id, patente, tipo_vehiculo, trip_id_actual, ultima_lat, ultima_lng, rut_chofer_asignado, estado, ultima_actualizacion)
+       SELECT
+         CAST($1 AS text), 'VIDEO-03', 'CAMION', NULL, 0, 0, '33333333-3', 'DISPONIBLE', NOW()
+       WHERE NOT EXISTS (
+         SELECT 1 FROM flota_vehiculos fv WHERE CAST(fv.tenant_id AS text) = CAST($1 AS text) AND fv.patente = 'VIDEO-03'
+       )`,
+      [tenant_id]
+    );
+    await client.query(
+      `INSERT INTO flota_vehiculos
+         (tenant_id, patente, tipo_vehiculo, trip_id_actual, ultima_lat, ultima_lng, rut_chofer_asignado, estado, ultima_actualizacion)
+       SELECT
+         CAST($1 AS text), 'VIDEO-02', 'CAMION', NULL, 0, 0, '22222222-2', 'DISPONIBLE', NOW()
+       WHERE NOT EXISTS (
+         SELECT 1 FROM flota_vehiculos fv WHERE CAST(fv.tenant_id AS text) = CAST($1 AS text) AND fv.patente = 'VIDEO-02'
+       )`,
+      [tenant_id]
+    );
+    await client.query(
+      `UPDATE flota_vehiculos
+       SET trip_id_actual = NULL,
+           ultima_lat = 0,
+           ultima_lng = 0,
+           rut_chofer_asignado = CASE
+             WHEN patente = 'VIDEO-02' THEN '22222222-2'
+             WHEN patente = 'VIDEO-03' THEN '33333333-3'
+             ELSE rut_chofer_asignado
+           END,
+           estado = 'DISPONIBLE',
+           ultima_actualizacion = NOW()
+       WHERE tenant_id = $1 AND patente IN ('VIDEO-02', 'VIDEO-03')`,
+      [tenant_id]
+    );
+    await client.query('RELEASE SAVEPOINT sp_video_flota');
+  } catch (e) {
+    result.insert_error = e.message || String(e);
+    try { await client.query('ROLLBACK TO SAVEPOINT sp_video_flota'); } catch (_) { /* ignore */ }
+  }
+
+  const already = await client.query(
+    `SELECT COUNT(*)::int AS n FROM choferes
+     WHERE tenant_id = $1 AND CAST(chofer_id AS VARCHAR) = '9000000003'`,
+    [tenant_id]
+  );
+  if ((already.rows[0]?.n || 0) === 0) {
+    const sp = 'sp_video_camila';
+    try {
+      await client.query(`SAVEPOINT ${sp}`);
+      const colsRes = await client.query(
+        `SELECT column_name, is_nullable, column_default, is_identity
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'choferes'
+         ORDER BY ordinal_position`
+      );
+      const srcRes = await client.query(
+        `SELECT * FROM choferes WHERE tenant_id = $1 LIMIT 1`,
+        [tenant_id]
+      );
+      const src = srcRes.rows[0];
+      if (!src) throw new Error('no_source_driver');
+
+      const overrides = {
+        chofer_id: src.chofer_id != null && Number.isFinite(Number(src.chofer_id))
+          ? 9000000003
+          : '9000000003',
+        tenant_id,
+        nombre_completo: 'Camila Ríos',
+        rut: '33333333-3',
+        patente_asignada: null,
+        estado: 'DISPONIBLE',
+        pin: '3333',
+      };
+      if (Object.prototype.hasOwnProperty.call(src, 'email')) overrides.email = 'camila.rios.video@demo.cl';
+      if (Object.prototype.hasOwnProperty.call(src, 'telefono')) overrides.telefono = '+56911110003';
+      if (Object.prototype.hasOwnProperty.call(src, 'telegram_chat_id')) overrides.telegram_chat_id = null;
+      if (Object.prototype.hasOwnProperty.call(src, 'telegram_id')) overrides.telegram_id = null;
+
+      const skipCols = new Set(['id']);
+      const insertCols = colsRes.rows.filter((c) => {
+        if (skipCols.has(c.column_name)) return false;
+        if (String(c.is_identity) === 'YES') return false;
+        const def = String(c.column_default || '');
+        if (/nextval\(/i.test(def)) return false;
+        return true;
+      }).map((c) => c.column_name);
+
+      const values = insertCols.map((name) => (
+        Object.prototype.hasOwnProperty.call(overrides, name) ? overrides[name] : src[name]
+      ));
+      const placeholders = insertCols.map((_, i) => `$${i + 1}`).join(', ');
+      await client.query(
+        `INSERT INTO choferes (${insertCols.map((c) => `"${c}"`).join(', ')}) VALUES (${placeholders})`,
+        values
+      );
+      await client.query(
+        `UPDATE choferes SET patente_asignada = 'VIDEO-03'
+         WHERE tenant_id = $1 AND CAST(chofer_id AS VARCHAR) = '9000000003'
+           AND EXISTS (
+             SELECT 1 FROM flota_vehiculos fv
+             WHERE fv.tenant_id = $1 AND fv.patente = 'VIDEO-03'
+           )`,
+        [tenant_id]
+      );
+      await client.query(`RELEASE SAVEPOINT ${sp}`);
+    } catch (e) {
+      result.insert_error = e.message || String(e);
+      try { await client.query('ROLLBACK TO SAVEPOINT sp_video_camila'); } catch (_) { /* ignore */ }
+    }
+  } else {
+    await client.query(
+      `UPDATE choferes
+       SET estado = 'DISPONIBLE',
+           patente_asignada = COALESCE(patente_asignada, 'VIDEO-03')
+       WHERE tenant_id = $1 AND CAST(chofer_id AS VARCHAR) = '9000000003'
+         AND EXISTS (
+           SELECT 1 FROM flota_vehiculos fv
+           WHERE fv.tenant_id = $1 AND fv.patente = 'VIDEO-03'
+         )`,
+      [tenant_id]
+    );
+  }
+
+  try {
+    await client.query('SAVEPOINT sp_video_patentes');
+    await client.query(
+      `UPDATE choferes
+       SET patente_asignada = CASE
+         WHEN CAST(chofer_id AS VARCHAR) = '8173236363' THEN COALESCE(patente_asignada, 'KV-JS-99')
+         WHEN CAST(chofer_id AS VARCHAR) = '8252320505' THEN 'VIDEO-02'
+         WHEN CAST(chofer_id AS VARCHAR) = '9000000003' THEN 'VIDEO-03'
+         ELSE patente_asignada
+       END
+       WHERE tenant_id = $1
+         AND CAST(chofer_id AS VARCHAR) IN ('8173236363', '8252320505', '9000000003')`,
+      [tenant_id]
+    );
+    await client.query('RELEASE SAVEPOINT sp_video_patentes');
+  } catch (e) {
+    try { await client.query('ROLLBACK TO SAVEPOINT sp_video_patentes'); } catch (_) { /* ignore */ }
+  }
+
+  try {
+    await client.query('SAVEPOINT sp_video_tags');
+    await client.query(
+      `UPDATE choferes
+       SET tags = CASE
+         WHEN CAST(chofer_id AS VARCHAR) = '8173236363' THEN '["ALIMENTOS"]'::jsonb
+         WHEN CAST(chofer_id AS VARCHAR) = '9000000003' THEN '["PELIGROSO"]'::jsonb
+         WHEN CAST(chofer_id AS VARCHAR) = '8252320505' THEN '["PELIGROSO"]'::jsonb
+         ELSE tags
+       END
+       WHERE tenant_id = $1
+         AND CAST(chofer_id AS VARCHAR) IN ('8173236363', '9000000003', '8252320505')`,
+      [tenant_id]
+    );
+    await client.query('RELEASE SAVEPOINT sp_video_tags');
+  } catch (e) {
+    try { await client.query('ROLLBACK TO SAVEPOINT sp_video_tags'); } catch (_) { /* ignore */ }
+  }
+
+  const nRes = await client.query(
+    `SELECT COUNT(*)::int AS n FROM choferes WHERE tenant_id = $1 AND estado = 'DISPONIBLE'`,
+    [tenant_id]
+  );
+  result.n_disponible = nRes.rows[0]?.n || 0;
+  try {
+    const driversRes = await client.query(
+      `SELECT CAST(chofer_id AS text) AS chofer_id, nombre_completo, rut, patente_asignada, tags, estado
+       FROM choferes
+       WHERE tenant_id = $1
+         AND CAST(chofer_id AS text) IN ('8173236363', '8252320505', '9000000003')
+       ORDER BY chofer_id`,
+      [tenant_id]
+    );
+    const vehiclesRes = await client.query(
+      `SELECT patente, rut_chofer_asignado, estado, trip_id_actual, tipo_vehiculo
+       FROM flota_vehiculos
+       WHERE CAST(tenant_id AS text) = CAST($1 AS text)
+         AND patente IN ('KV-JS-99', 'VIDEO-02', 'VIDEO-03')
+       ORDER BY patente`,
+      [tenant_id]
+    );
+    result.debug = {
+      drivers: driversRes.rows,
+      vehicles: vehiclesRes.rows,
+    };
+  } catch (_) {
+    result.debug = {};
+  }
+  return result;
+}
+
+function assertStagingVideoQa(env) {
+  const environment = String(env?.ENVIRONMENT || env?.WORKER_ENV || '').toLowerCase();
+  if (environment === 'production' || environment === 'prod') {
+    return jsonResponse({ error: 'No disponible', code: 'video_prep_disabled' }, 404);
+  }
+  return null;
+}
 
 /**
  * POST /api/admin/qa/driver-token
@@ -576,6 +892,17 @@ export async function adminQaApplySchema(request, env, operator = null) {
         DROP INDEX IF EXISTS uq_guias_despacho_tenant_ot;
         CREATE UNIQUE INDEX IF NOT EXISTS uq_guias_despacho_traslado
           ON guias_despacho (tenant_id, ot_id, trip_id, (COALESCE(patente, '')))`);
+      await run('017_idx_ordenes_tenant_trip', `
+        CREATE INDEX IF NOT EXISTS idx_ordenes_pendientes_tenant_trip
+          ON ordenes_pendientes (tenant_id, trip_id)
+          WHERE trip_id IS NOT NULL`);
+      await run('017_idx_flota_live', `
+        CREATE INDEX IF NOT EXISTS idx_flota_vehiculos_live
+          ON flota_vehiculos (tenant_id)
+          WHERE trip_id_actual IS NOT NULL AND ultima_lat IS NOT NULL`);
+      await run('017_idx_eta_bias_chofer', `
+        CREATE INDEX IF NOT EXISTS idx_eta_accuracy_tenant_chofer_fecha
+          ON eta_accuracy_metrics (tenant_id, chofer_id, fecha)`);
     }, { tenantId: tenant_id, statementTimeout: 60000 });
 
     return jsonResponse({ exito: true, applied: steps });
@@ -818,6 +1145,308 @@ export async function adminQaCleanup(request, env, operator = null) {
       });
     }, { tenantId: tenant_id, statementTimeout: 30000 });
   } catch (e) {
+    return jsonResponse({ error: e.message }, 500);
+  }
+}
+
+/**
+ * POST /api/choferes/reset-demo
+ * Staging only (QA_DRIVER_RESET=true). El chofer autenticado deja su viaje
+ * actual como si no hubiera salido: paradas pendientes, flota asignada, chat vacío.
+ */
+export async function adminQaResetMyDemoTrip(request, env) {
+  const environment = String(env?.ENVIRONMENT || env?.WORKER_ENV || '').toLowerCase();
+  if (environment === 'production' || environment === 'prod') {
+    return jsonResponse({ error: 'No disponible', code: 'qa_reset_disabled' }, 404);
+  }
+  if (String(env?.QA_DRIVER_RESET || '') !== 'true') {
+    return jsonResponse({ error: 'No disponible', code: 'qa_reset_disabled' }, 404);
+  }
+
+  const auth = await verifyDriverToken(request, env);
+  if (!auth.ok) return auth.response;
+
+  const tenant_id = auth.payload.tenant_id;
+  const rut = auth.payload.rut;
+  const tenantError = requireTenantId(tenant_id);
+  if (tenantError) return tenantError;
+  if (!rut) return jsonResponse({ error: 'Token sin rut' }, 400);
+
+  try {
+    return await withDb(env, async (client) => {
+      const fleet = await client.query(
+        `SELECT patente, trip_id_actual
+         FROM flota_vehiculos
+         WHERE tenant_id = $1 AND rut_chofer_asignado = $2 AND trip_id_actual IS NOT NULL
+         LIMIT 1`,
+        [tenant_id, rut]
+      );
+      const trip_id = fleet.rows[0]?.trip_id_actual;
+      if (!trip_id) {
+        return jsonResponse({ exito: true, trip_id: null, mensaje: 'El chofer no tiene viaje asignado' });
+      }
+
+      const stops = await client.query(
+        `UPDATE ordenes_pendientes
+         SET estado_operacional = 'CAMION_ASIGNADO',
+             hora_llegada_chofer = NULL,
+             hora_real = NULL,
+             evidencia_url = NULL,
+             firma_url = NULL,
+             eta = NULL
+         WHERE tenant_id = $1 AND trip_id = $2
+         RETURNING ot_id`,
+        [tenant_id, trip_id]
+      );
+
+      await client.query(
+        `UPDATE flota_vehiculos
+         SET estado = 'CAMION_ASIGNADO',
+             ultima_actualizacion = NOW()
+         WHERE tenant_id = $1 AND trip_id_actual = $2`,
+        [tenant_id, trip_id]
+      );
+
+      await client.query(
+        `UPDATE choferes
+         SET estado = 'OCUPADO'
+         WHERE tenant_id = $1 AND rut = $2`,
+        [tenant_id, rut]
+      );
+
+      const bitacora = await client.query(
+        `DELETE FROM bitacora_viajes
+         WHERE tenant_id = $1
+           AND trip_id = $2
+           AND tipo_evento IN (
+             'CHAT_CHOFER', 'CHAT_TORRE', 'LLEGADA', 'ENTREGA', 'SALIDA', 'PROBLEMA'
+           )`,
+        [tenant_id, trip_id]
+      );
+
+      return jsonResponse({
+        exito: true,
+        trip_id,
+        stops_reset: stops.rowCount,
+        chat_y_eventos_borrados: bitacora.rowCount,
+      });
+    }, { tenantId: tenant_id, statementTimeout: 30000 });
+  } catch (e) {
+    console.error('[QA_RESET_MY_TRIP]', e.message);
+    return jsonResponse({ error: e.message }, 500);
+  }
+}
+
+/**
+ * POST /api/admin/qa/video-prep
+ * body: { mode: 'empty' | 'seed_demo', chofer_id?: string }
+ * Staging only — prepara la torre para grabación de video.
+ */
+export async function adminQaVideoPrep(request, env, operator = null) {
+  const blocked = assertStagingVideoQa(env);
+  if (blocked) return blocked;
+
+  const tenant_id = operator?.tenant_id;
+  const tenantError = requireTenantId(tenant_id);
+  if (tenantError) return tenantError;
+
+  let body = {};
+  try { body = await request.json(); } catch { /* empty */ }
+  let mode = String(body.mode || '').toLowerCase();
+  if (!mode) {
+    try { mode = String(new URL(request.url).searchParams.get('mode') || 'empty').toLowerCase(); }
+    catch { mode = 'empty'; }
+  }
+
+  try {
+    return await withDb(env, async (client) => {
+      await ensureDemoDteIdentity(client, tenant_id);
+
+      if (mode === 'ruta_rapida_draft') {
+        const fleet = await ensureTresCamionesDemo(client, tenant_id);
+        return jsonResponse({
+          exito: true,
+          mode: 'ruta_rapida_draft',
+          draft: getVideoRutaRapidaDraft(),
+          fleet,
+        });
+      }
+
+      if (mode === 'empty') {
+        const cancelledTrips = await client.query(
+          `UPDATE ordenes_pendientes
+           SET estado_operacional = 'CANCELADO_PLANILLA',
+               trip_id = NULL,
+               stop_sequence = NULL,
+               chofer_asignado_id = NULL,
+               eta = NULL,
+               hora_llegada_chofer = NULL,
+               hora_real = NULL,
+               metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                 'video_prep', 'empty',
+                 'video_prep_at', NOW()::text
+               )
+           WHERE tenant_id = $1
+             AND COALESCE(estado_operacional, '') NOT IN ('ENTREGADO', 'RECHAZADO', 'CANCELADO_PLANILLA')
+           RETURNING ot_id`,
+          [tenant_id]
+        );
+
+        const fleetCleared = await client.query(
+          `UPDATE flota_vehiculos
+           SET trip_id_actual = NULL,
+               estado = 'DISPONIBLE',
+               ultima_actualizacion = NOW()
+           WHERE tenant_id = $1
+           RETURNING patente`,
+          [tenant_id]
+        );
+
+        const driversFreed = await client.query(
+          `UPDATE choferes
+           SET estado = 'DISPONIBLE'
+           WHERE tenant_id = $1
+           RETURNING chofer_id`,
+          [tenant_id]
+        );
+
+        await client.query(
+          `UPDATE fleet_alerts
+           SET status = 'CLOSED', updated_at = NOW()
+           WHERE tenant_id = $1 AND status IN ('OPEN', 'ACKED', 'RESCUING')`,
+          [tenant_id]
+        );
+
+        // Origen Res.154: depot debe tener dirección/comuna o la guía falla
+        await client.query(
+          `UPDATE depots
+           SET direccion = COALESCE(NULLIF(TRIM(direccion), ''), 'Av. Américo Vespucio 1501, Maipú, Región Metropolitana, Chile'),
+               comuna = COALESCE(NULLIF(TRIM(comuna), ''), 'Maipú')
+           WHERE tenant_id = $1
+             AND (direccion IS NULL OR TRIM(direccion) = '' OR comuna IS NULL OR TRIM(comuna) = '')`,
+          [tenant_id]
+        );
+
+        const fleet = await ensureTresCamionesDemo(client, tenant_id);
+
+        return jsonResponse({
+          exito: true,
+          mode: 'empty',
+          applied: {
+            orders_cancelled: cancelledTrips.rowCount,
+            fleet_cleared: fleetCleared.rowCount,
+            drivers_freed: driversFreed.rowCount,
+          },
+          fleet,
+          hint: 'Torre lista para grabar desde cero. Tras el corte, POST { "mode": "seed_demo" }.',
+        });
+      }
+
+      if (mode === 'seed_demo') {
+        const trip_id = 'DEMO-VIDEO-6';
+        const choferId = body.chofer_id != null ? String(body.chofer_id) : '8173236363';
+        const now = new Date();
+
+        const choferRes = await client.query(
+          `SELECT chofer_id, rut, nombre_completo, patente_asignada
+           FROM choferes
+           WHERE tenant_id = $1 AND CAST(chofer_id AS VARCHAR) = CAST($2 AS VARCHAR)
+           LIMIT 1`,
+          [tenant_id, choferId]
+        );
+        const chofer = choferRes.rows[0];
+        if (!chofer?.rut) {
+          return jsonResponse({ error: 'Chofer demo no encontrado' }, 404);
+        }
+
+        await client.query(
+          `UPDATE ordenes_pendientes
+           SET estado_operacional = 'CANCELADO_PLANILLA',
+               trip_id = NULL,
+               stop_sequence = NULL,
+               chofer_asignado_id = NULL,
+               metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('video_prep', 'seed_demo_reset')
+           WHERE tenant_id = $1
+             AND trip_id = $2
+             AND COALESCE(estado_operacional, '') NOT IN ('ENTREGADO', 'RECHAZADO')`,
+          [tenant_id, trip_id]
+        );
+
+        let inserted = 0;
+        for (const stop of VIDEO_DEMO_STOPS) {
+          const slaIso = resolveSlaFromTimeOfDay(stop.sla_hora, now);
+          const metadata = {
+            origen: 'VIDEO_DEMO',
+            direccion_entrega: stop.direccion,
+            lat_destino: stop.lat,
+            lng_destino: stop.lng,
+            video_demo: true,
+          };
+          await client.query(
+            `INSERT INTO ordenes_pendientes (
+              ot_id, cliente, estado_operacional, valor_oc_clp, monto_total,
+              fecha_hora_sla, ventana_fin, metadata, trip_id, stop_sequence,
+              chofer_asignado_id, tenant_id, lat, lng
+            ) VALUES ($1,$2,'CAMION_ASIGNADO',$3,$3,$4,$4,$5,$6,$7,$8,$9,$10,$11)
+            ON CONFLICT (ot_id) DO UPDATE SET
+              cliente = EXCLUDED.cliente,
+              estado_operacional = EXCLUDED.estado_operacional,
+              valor_oc_clp = EXCLUDED.valor_oc_clp,
+              monto_total = EXCLUDED.monto_total,
+              fecha_hora_sla = EXCLUDED.fecha_hora_sla,
+              ventana_fin = EXCLUDED.ventana_fin,
+              metadata = EXCLUDED.metadata,
+              trip_id = EXCLUDED.trip_id,
+              stop_sequence = EXCLUDED.stop_sequence,
+              chofer_asignado_id = EXCLUDED.chofer_asignado_id,
+              lat = EXCLUDED.lat,
+              lng = EXCLUDED.lng`,
+            [
+              stop.ot_id,
+              stop.cliente,
+              stop.monto,
+              slaIso,
+              JSON.stringify(metadata),
+              trip_id,
+              stop.seq,
+              chofer.chofer_id,
+              tenant_id,
+              stop.lat,
+              stop.lng,
+            ]
+          );
+          inserted += 1;
+        }
+
+        await client.query(
+          `UPDATE flota_vehiculos
+           SET trip_id_actual = $3,
+               rut_chofer_asignado = $4,
+               estado = 'CAMION_ASIGNADO',
+               ultima_actualizacion = NOW()
+           WHERE tenant_id = $1 AND patente = $2`,
+          [tenant_id, chofer.patente_asignada || 'KV-JS-99', trip_id, chofer.rut]
+        );
+
+        await client.query(
+          `UPDATE choferes SET estado = 'OCUPADO' WHERE tenant_id = $1 AND chofer_id = $2`,
+          [tenant_id, chofer.chofer_id]
+        );
+
+        return jsonResponse({
+          exito: true,
+          mode: 'seed_demo',
+          trip_id,
+          chofer: chofer.nombre_completo,
+          stops: inserted,
+          hint: 'Recargá la torre para ver las 6 paradas en mapa (segmento post-corte).',
+        });
+      }
+
+      return jsonResponse({ error: 'mode debe ser empty o seed_demo' }, 400);
+    }, { tenantId: tenant_id, statementTimeout: 60000 });
+  } catch (e) {
+    console.error('[QA_VIDEO_PREP]', e.message);
     return jsonResponse({ error: e.message }, 500);
   }
 }

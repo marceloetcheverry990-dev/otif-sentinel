@@ -273,6 +273,26 @@ export default function HomeScreen() {
     return () => clearInterval(id);
   }, [tenantId, rut, token]);
 
+  // Si una mutación queda en cola (ej. SALIDA tras PROBLEMA por 5xx transitorio),
+  // reintentar en background para no dejar la UI pegada en "pendiente" indefinidamente.
+  useEffect(() => {
+    if (!tenantId || !rut || !token) return;
+    if (pendingQueue.length === 0 && failedQueue.length === 0) return;
+
+    processQueue();
+    const retryId = setInterval(() => {
+      const sync = useSyncStore.getState();
+      if (sync.isSyncing) return;
+      if (sync.queue.some((a) => a.failed && a.endpoint === '/chofer/evento')) {
+        sync.retryFailed();
+      } else {
+        sync.processQueue();
+      }
+    }, 10000);
+
+    return () => clearInterval(retryId);
+  }, [tenantId, rut, token, pendingQueue.length, failedQueue.length, processQueue]);
+
   // Acción al deslizar hacia abajo
   const onRefresh = async () => {
     setRefreshing(true);
@@ -299,19 +319,50 @@ export default function HomeScreen() {
   };
 
   const iniciarRuta = async () => {
-    if (viajes.length === 0 || !tenantId || !rut) return;
-    
+    if (viajes.length === 0 || !tenantId || !rut || !token) return;
+
+    const tripId = viajes[0].trip_id;
     const nuevosViajes = [...viajes];
     nuevosViajes[0].estado = 'EN_RUTA';
     setViajes(nuevosViajes);
 
-    addAction('/viajes/estado', { 
-      trip_id: nuevosViajes[0].trip_id, 
-      estado: 'EN_RUTA', 
-      timestamp: Date.now() 
-    });
+    // Persistencia inmediata (no solo cola): dispara guía Res.154 en el Worker
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/mobile-sync`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          path: '/viajes/estado',
+          payload: { trip_id: tripId, estado: 'EN_RUTA', timestamp: Date.now() },
+          tenant_id: tenantId,
+          rut,
+        }),
+      });
+      if (!res.ok && res.status !== 401) {
+        addAction('/viajes/estado', {
+          trip_id: tripId,
+          estado: 'EN_RUTA',
+          timestamp: Date.now(),
+        });
+      }
+      if (res.status === 401) {
+        await logout();
+        return;
+      }
+    } catch {
+      addAction('/viajes/estado', {
+        trip_id: tripId,
+        estado: 'EN_RUTA',
+        timestamp: Date.now(),
+      });
+    }
 
-    await sendMessage(tenantId, nuevosViajes[0].trip_id, rut, "🚀 ¡He comenzado la ruta y voy en camino!");
+    await sendMessage(tenantId, tripId, rut, '🚀 ¡He comenzado la ruta y voy en camino!');
+    // Refresco corto para ver guías en Torre / estado flota
+    setTimeout(() => { fetchViajes(); }, 1200);
   };
 
   const handleStopInteraction = (stop: StopInfo, action: () => void) => {
@@ -676,7 +727,13 @@ export default function HomeScreen() {
                 style={styles.btnDeliver}
                 onPress={() => handleDeliveryCamera(item.id)}
               >
-                <Text style={styles.btnTextWhite}>Escanear y entregar 📦</Text>
+                <Text style={styles.btnTextWhite}>
+                  {(() => {
+                    const pod = resolveStopPod(item);
+                    if (!pod.foto && !pod.firma && !pod.scan) return 'Confirmar entrega ✓';
+                    return 'Escanear y entregar 📦';
+                  })()}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.btnProblem}

@@ -2,7 +2,7 @@
  * Restricciones de carga: peso/volumen dual + segregación HAZMAT vs FOOD.
  */
 
-const HAZMAT_TAGS = new Set(['HAZMAT', 'ADR', 'PELGEROSO']);
+const HAZMAT_TAGS = new Set(['HAZMAT', 'ADR', 'PELGEROSO', 'PELIGROSO', 'PELIGROSA']);
 const FOOD_TAGS = new Set(['FOOD', 'ALIMENTO', 'ALIMENTOS', 'FRIO_ALIMENTO']);
 
 export function normalizeTags(raw) {

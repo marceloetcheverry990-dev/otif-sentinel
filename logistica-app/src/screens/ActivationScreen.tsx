@@ -42,12 +42,26 @@ export default function ActivationScreen({ navigation }: any) {
       
       <View style={styles.inputContainer}>
         <Text style={styles.label}>Código de Empresa</Text>
-        <TextInput style={styles.input} value={tenantId} onChangeText={setTenantId} editable={step === 1 && !isLoading} />
+        <TextInput
+          style={styles.input}
+          value={tenantId}
+          onChangeText={setTenantId}
+          placeholder="empresa_base"
+          accessibilityLabel="Código de Empresa"
+          editable={step === 1 && !isLoading}
+        />
       </View>
       
       <View style={styles.inputContainer}>
         <Text style={styles.label}>RUT (con guión)</Text>
-        <TextInput style={styles.input} value={rut} onChangeText={setRut} editable={step === 1 && !isLoading} />
+        <TextInput
+          style={styles.input}
+          value={rut}
+          onChangeText={setRut}
+          placeholder="11111111-1"
+          accessibilityLabel="RUT"
+          editable={step === 1 && !isLoading}
+        />
       </View>
 
       {step === 2 && (
@@ -56,22 +70,43 @@ export default function ActivationScreen({ navigation }: any) {
           <TextInput 
             style={styles.input} value={newPin} 
             onChangeText={(t) => setNewPin(t.replace(/[^0-9]/g, ''))} 
-            keyboardType="numeric" secureTextEntry maxLength={4} editable={!isLoading} 
+            placeholder="1234"
+            keyboardType="numeric" secureTextEntry maxLength={4}
+            accessibilityLabel="Nuevo PIN"
+            editable={!isLoading} 
           />
         </View>
       )}
 
       {step === 1 ? (
-        <TouchableOpacity style={[styles.button, isLoading && styles.disabled]} onPress={handleVerify} disabled={isLoading}>
+        <TouchableOpacity
+          style={[styles.button, isLoading && styles.disabled]}
+          onPress={handleVerify}
+          disabled={isLoading}
+          accessibilityRole="button"
+          accessibilityLabel="Verificar Identidad"
+        >
           {isLoading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>VERIFICAR IDENTIDAD</Text>}
         </TouchableOpacity>
       ) : (
-        <TouchableOpacity style={[styles.button, styles.successButton, isLoading && styles.disabled]} onPress={handleActivate} disabled={isLoading}>
+        <TouchableOpacity
+          style={[styles.button, styles.successButton, isLoading && styles.disabled]}
+          onPress={handleActivate}
+          disabled={isLoading}
+          accessibilityRole="button"
+          accessibilityLabel="Establecer PIN y Entrar"
+        >
           {isLoading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.buttonText}>ESTABLECER PIN Y ENTRAR</Text>}
         </TouchableOpacity>
       )}
 
-      <TouchableOpacity style={styles.secondaryButton} onPress={() => navigation.goBack()} disabled={isLoading}>
+      <TouchableOpacity
+        style={styles.secondaryButton}
+        onPress={() => navigation.goBack()}
+        disabled={isLoading}
+        accessibilityRole="button"
+        accessibilityLabel="Volver al Login"
+      >
         <Text style={styles.secondaryButtonText}>Volver al Login</Text>
       </TouchableOpacity>
     </View>

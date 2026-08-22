@@ -72,7 +72,11 @@
 		"MONITORING_ALERTING": "true",
 		"MONITORING_SAMPLE_RATE": "0.1",
 		"MONITORING_USERNAME": "admin",
-		"MONITORING_TENANT_ID": "empresa_base"
+		"MONITORING_TENANT_ID": "empresa_base",
+		"ENVIRONMENT": "production",
+		"DTE_PROVIDER": "stub",
+		"DTE_AMBIENTE": "certificacion",
+		"SHARED_DATASTORE": "false"
 		// DASHBOARD_SECRET: configurar con `wrangler secret put DASHBOARD_SECRET`
 		// Generar con: openssl rand -base64 32
 		// NUNCA escribir el valor aquí — va exclusivamente como Cloudflare Secret
@@ -90,13 +94,14 @@
 			"id": "6ee132b2ac2548bebd5dfae76dc65003"
 		}
 	],
-	// 🟢 STAGING — mismo Hyperdrive/DB; Worker, colas y secrets separados (R8)
+	// Staging: colas propias. Hyperdrive/KV/R2 se separan con `npm run provision:staging-db`
+	// cuando exista un Postgres distinto. Hasta entonces SHARED_DATASTORE=true.
 	"env": {
 		"staging": {
 			"name": "lead-rescue-pipeline-staging",
 			"vars": {
 				"PUBLIC_BASE_URL": "https://lead-rescue-pipeline-staging.marceloetcheverry990.workers.dev",
-				"CORS_ALLOWED_ORIGINS": "https://lead-rescue-pipeline-staging.marceloetcheverry990.workers.dev,http://localhost:8787,http://127.0.0.1:8787",
+				"CORS_ALLOWED_ORIGINS": "https://lead-rescue-pipeline-staging.marceloetcheverry990.workers.dev,http://localhost:8787,http://127.0.0.1:8787,http://localhost:8092,http://127.0.0.1:8092",
 				"OPENAI_ENRICH_ENABLED": "false",
 				"MONITORING_ENABLED": "true",
 				"MONITORING_ERROR_TRACKING": "true",
@@ -104,7 +109,13 @@
 				"MONITORING_ALERTING": "true",
 				"MONITORING_SAMPLE_RATE": "0.1",
 				"MONITORING_USERNAME": "admin",
-				"MONITORING_TENANT_ID": "empresa_base"
+				"MONITORING_TENANT_ID": "empresa_base",
+				"QA_DRIVER_RESET": "true",
+				"ENVIRONMENT": "staging",
+				"DTE_PROVIDER": "stub",
+				"DTE_ALLOW_STUB": "true",
+				"DTE_AMBIENTE": "certificacion",
+				"SHARED_DATASTORE": "true"
 			},
 			"queues": {
 				"producers": [

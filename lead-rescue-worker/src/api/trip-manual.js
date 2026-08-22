@@ -10,6 +10,7 @@ import {
   unionTags,
 } from '../helpers/cargo-constraints.js';
 import { ensureGuiaForLateOt } from '../helpers/dte/ensure-guia-late-ot.js';
+import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 import {
   FROZEN_STATES,
   rebuildSequences,
@@ -191,6 +192,7 @@ export async function reorderTripStops(request, env, operator = null) {
 
       const sequenced = rebuildSequences(frozen, newOpen);
       await persistSequences(client, tenant_id, trip_id, sequenced);
+      invalidateTowerPoll(tenant_id);
       return jsonResponse({
         exito: true,
         trip_id,
@@ -323,6 +325,8 @@ export async function moveTripStop(request, env, operator = null, ctx = null) {
 
       await persistSequences(client, tenant_id, to_trip_id, destSeq, destChofer);
       await persistSequences(client, tenant_id, from_trip_id, srcSeq);
+
+      invalidateTowerPoll(tenant_id);
 
       return jsonResponse({
         exito: true,

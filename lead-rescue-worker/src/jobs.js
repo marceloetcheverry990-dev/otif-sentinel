@@ -172,22 +172,49 @@ export async function auditarFlotaEnVivo(env) {
       }
 
       for (const row of fleet.rows) {
-        const enSitio = await client.query(
-          `SELECT 1 FROM ordenes_pendientes
-           WHERE tenant_id = $1 AND trip_id = $2 AND estado_operacional = 'EN_SITIO'
-           LIMIT 1`,
+        // Viaje sin paradas abiertas → liberar flota y no alertar (falso positivo típico post-video/QA).
+        const activeStops = await client.query(
+          `SELECT COUNT(*)::int AS n,
+                  COUNT(*) FILTER (WHERE estado_operacional = 'EN_SITIO')::int AS en_sitio
+           FROM ordenes_pendientes
+           WHERE tenant_id = $1 AND trip_id = $2
+             AND COALESCE(estado_operacional, '') NOT IN (
+               'ENTREGADO', 'RECHAZADO', 'CANCELADO_PLANILLA', 'RETORNO_BODEGA'
+             )`,
           [row.tenant_id, row.trip_id]
         );
+        const openN = Number(activeStops.rows?.[0]?.n || 0);
+        const hasEnSitio = Number(activeStops.rows?.[0]?.en_sitio || 0) > 0;
+
+        if (openN === 0) {
+          await client.query(
+            `UPDATE flota_vehiculos
+             SET trip_id_actual = NULL,
+                 estado = 'DISPONIBLE',
+                 ultima_actualizacion = NOW()
+             WHERE tenant_id = $1 AND trip_id_actual = $2`,
+            [row.tenant_id, row.trip_id]
+          );
+          await client.query(
+            `UPDATE fleet_alerts
+             SET status = 'RESOLVED', updated_at = NOW()
+             WHERE tenant_id = $1 AND trip_id = $2
+               AND status IN ('OPEN', 'ACKED')
+               AND alert_type IN ('STUCK_VEHICLE', 'SIGNAL_LOST')`,
+            [row.tenant_id, row.trip_id]
+          );
+          continue;
+        }
 
         const verdict = evaluateDeadMan({
           lastSignificantMoveAt: row.last_significant_move_at,
           ultimaActualizacion: row.ultima_actualizacion,
-          hasEnSitio: enSitio.rowCount > 0,
+          hasEnSitio,
           thresholds,
         });
 
-        if (verdict.kind === 'ok') {
-          // Auto-resolver alertas abiertas si el camión se movió
+        if (verdict.kind === 'ok' || verdict.kind === 'stale') {
+          // Auto-resolver: se movió, o el ping es tan viejo que no es operativo (SPOT de QA).
           await client.query(
             `UPDATE fleet_alerts
              SET status = 'RESOLVED', updated_at = NOW()
@@ -292,15 +319,20 @@ export async function auditarFlotaEnVivo(env) {
       }
 
       // Resolver alertas de viajes que ya no están en flota activa
+      // o cuyo GPS es tan viejo que no es operativo (SPOT abandonado).
       await client.query(
         `UPDATE fleet_alerts fa
          SET status = 'RESOLVED', updated_at = NOW()
          WHERE fa.status IN ('OPEN', 'ACKED')
-           AND NOT EXISTS (
-             SELECT 1 FROM flota_vehiculos fv
-             WHERE fv.tenant_id = fa.tenant_id
-               AND fv.trip_id_actual = fa.trip_id
-           )`
+           AND (
+             COALESCE(fa.stuck_minutes, 0) >= $1
+             OR NOT EXISTS (
+               SELECT 1 FROM flota_vehiculos fv
+               WHERE fv.tenant_id = fa.tenant_id
+                 AND fv.trip_id_actual = fa.trip_id
+             )
+           )`,
+        [LR().STALE_ALERT_MAX_MIN || 720]
       );
     });
   } catch (e) {

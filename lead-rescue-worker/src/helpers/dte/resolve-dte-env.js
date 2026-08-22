@@ -45,6 +45,7 @@ export async function resolveDteEnv(env, tenantSettings = null) {
       DTE_RAZON_SOCIAL: razon || env.DTE_RAZON_SOCIAL || null,
       DTE_AMBIENTE: ambiente || env.DTE_AMBIENTE || 'certificacion',
       SIMPLEAPI_TOKEN: null,
+      LIOREN_TOKEN: null,
       DTE_IDENTITY_ERROR: null,
     };
   }
@@ -53,7 +54,7 @@ export async function resolveDteEnv(env, tenantSettings = null) {
     rut = rut || env.DTE_RUT_EMISOR || null;
     razon = razon || env.DTE_RAZON_SOCIAL || null;
     ambiente = ambiente || env.DTE_AMBIENTE || null;
-    token = token || env.SIMPLEAPI_TOKEN || null;
+    token = token || env.SIMPLEAPI_TOKEN || env.LIOREN_TOKEN || null;
   }
 
   const missing = [];
@@ -75,7 +76,8 @@ export async function resolveDteEnv(env, tenantSettings = null) {
     DTE_RUT_EMISOR: rut,
     DTE_RAZON_SOCIAL: razon,
     DTE_AMBIENTE: ambiente || env.DTE_AMBIENTE || 'certificacion',
-    SIMPLEAPI_TOKEN: token,
+    SIMPLEAPI_TOKEN: provider === 'lioren' ? (env.SIMPLEAPI_TOKEN || null) : token,
+    LIOREN_TOKEN: provider === 'lioren' ? token : (env.LIOREN_TOKEN || null),
     DTE_IDENTITY_ERROR: identityError,
   };
 }

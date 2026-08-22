@@ -7,7 +7,20 @@ export const DEFAULT_DMS = {
   RED_STUCK_MIN: 40,
   SIGNAL_LOST_MIN: 15,
   RECENT_PING_MAX_MIN: 5,
+  /** A partir de acá es abandono (SPOT viejo), no una pérdida de señal operativa. */
+  STALE_ALERT_MAX_MIN: 12 * 60,
 };
+
+/** 26586 min → "18 d". Evita el número crudo en el banner. */
+export function formatStuckDuration(minutes) {
+  const m = Number(minutes);
+  if (!Number.isFinite(m) || m < 0) return '—';
+  if (m < 60) return Math.floor(m) + ' min';
+  if (m < 1440) return Math.floor(m / 60) + ' h';
+  const days = Math.floor(m / 1440);
+  const hours = Math.floor((m % 1440) / 60);
+  return hours ? days + ' d ' + hours + ' h' : days + ' d';
+}
 
 /**
  * @param {{
@@ -17,7 +30,7 @@ export const DEFAULT_DMS = {
  *   hasEnSitio?: boolean,
  *   thresholds?: Partial<typeof DEFAULT_DMS>
  * }} input
- * @returns {{ kind: 'ok'|'stuck'|'signal_lost', severity: 'YELLOW'|'RED'|null, stuckMinutes: number } }
+ * @returns {{ kind: 'ok'|'stuck'|'signal_lost'|'stale', severity: 'YELLOW'|'RED'|null, stuckMinutes: number } }
  */
 export function evaluateDeadMan(input) {
   const t = { ...DEFAULT_DMS, ...(input.thresholds || {}) };
@@ -41,6 +54,14 @@ export function evaluateDeadMan(input) {
       : 0;
 
   const pingAgeMin = Number.isFinite(pingAt) ? (now - pingAt) / 60000 : Infinity;
+
+  if (pingAgeMin >= (t.STALE_ALERT_MAX_MIN || DEFAULT_DMS.STALE_ALERT_MAX_MIN)) {
+    return {
+      kind: 'stale',
+      severity: null,
+      stuckMinutes: Math.floor(Number.isFinite(pingAgeMin) ? pingAgeMin : stuckMinutes),
+    };
+  }
 
   // Sin pings recientes → señal perdida
   if (pingAgeMin >= t.SIGNAL_LOST_MIN) {

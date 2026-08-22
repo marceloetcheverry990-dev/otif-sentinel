@@ -1,0 +1,4 @@
+# Normalizar line endings a LF
+* text=auto eol=lf
+*.md text eol=lf
+*.json text eol=lf

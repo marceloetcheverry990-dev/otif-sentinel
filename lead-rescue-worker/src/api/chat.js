@@ -8,7 +8,8 @@ import {
   verifyOperatorToken,
   verifySameOrigin,
 } from '../helpers/operator-auth.js';
-import { assertDriverOwnsTrip } from '../helpers/trip-ownership.js';
+import { assertDriverCanAccessTrip } from '../helpers/trip-ownership.js';
+import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 
 // Cache en memoria para mensajes (temporal hasta que se cree el índice)
 const chatCache = new Map();
@@ -44,6 +45,7 @@ async function resolveChatTenant(request, env) {
         tenant_id: driver.payload.tenant_id,
         role: 'driver',
         rut: driver.payload.rut,
+        chofer_id: driver.payload.chofer_id || null,
       };
     }
     // Bearer presente pero no es driver válido: no caer a operador anónimo
@@ -91,10 +93,11 @@ export async function handleChat(request, env) {
       }
 
       if (auth.role === 'driver') {
-        const tripErr = await assertDriverOwnsTrip(supabase, {
+        const tripErr = await assertDriverCanAccessTrip(supabase, {
           trip_id,
           tenant_id,
           rut: auth.rut,
+          chofer_id: auth.chofer_id || null,
         });
         if (tripErr) return tripErr;
       }
@@ -162,10 +165,11 @@ export async function handleChat(request, env) {
       }
 
       if (auth.role === 'driver') {
-        const tripErr = await assertDriverOwnsTrip(supabase, {
+        const tripErr = await assertDriverCanAccessTrip(supabase, {
           trip_id,
           tenant_id,
           rut: auth.rut,
+          chofer_id: auth.chofer_id || null,
         });
         if (tripErr) return tripErr;
       }
@@ -206,6 +210,7 @@ export async function handleChat(request, env) {
 
       // M-15: invalidar cache del trip tras POST
       chatCache.delete(`${tenant_id}:${trip_id}`);
+      invalidateTowerPoll(tenant_id);
 
       return new Response(JSON.stringify({ exito: true }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
     }

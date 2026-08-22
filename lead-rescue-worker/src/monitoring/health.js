@@ -4,6 +4,7 @@
 
 import { MONITORING_CONFIG } from './config.js';
 import { CONFIG } from '../config.js';
+import { envIsolationReport } from '../helpers/env-isolation.js';
 import pg from 'pg';
 
 const { Client } = pg;
@@ -107,6 +108,7 @@ export async function handleHealthCheck(request, env) {
     version: MONITORING_CONFIG.service.version,
     region: 'auto', // Cloudflare Workers region (auto-selected)
     components,
+    isolation: envIsolationReport(env),
   };
 
   // Cache the result

@@ -2,8 +2,6 @@
 // Funciones de cálculo server-side: financiero, SLA, sanitización y serialización.
 // Todas las funciones son puras (sin efectos secundarios de red ni DB).
 
-import { APP_CONFIG } from './appConfig.js';
-
 // ---------------------------------------------------------------------------
 // Formateo de moneda
 // ---------------------------------------------------------------------------
@@ -75,23 +73,31 @@ export const formatHoraCL = (fecha) => {
 export const calcularRiesgosSla = (viajesSeguros) => {
   let totalDineroEnCalle = 0;
   let totalDineroRiesgo = 0;
+  let totalParadasAbiertas = 0;
   const riesgosSla = [];
+  const TERMINALES = new Set(['ENTREGADO', 'RECHAZADO', 'CANCELADO_PLANILLA', 'RETORNO_BODEGA']);
 
   viajesSeguros.forEach(v => {
     let multaCalculadaViaje = 0;
     let atrasosDinamicosViaje = 0;
 
     (v.detalle_paradas || []).forEach(p => {
+      const estado = String(p.estado_operacional || '').toUpperCase();
+      const isTerminal = TERMINALES.has(estado);
       const montoTotal = Number(p.monto_total || p.valor || 0);
-      totalDineroEnCalle += montoTotal;
+
+      // Solo carga aún en calle (no entregada / cancelada)
+      if (!isTerminal) {
+        totalDineroEnCalle += montoTotal;
+        totalParadasAbiertas += 1;
+      }
 
       const isLate = Boolean(
         p.eta && p.fecha_hora_sla &&
         new Date(p.eta).getTime() > new Date(p.fecha_hora_sla).getTime()
       );
-      const isEntregado = p.estado_operacional === APP_CONFIG.ESTADOS.ENTREGADO;
 
-      if (isLate && !isEntregado) {
+      if (isLate && !isTerminal) {
         atrasosDinamicosViaje++;
         const multaParada = montoTotal * 0.10;
         totalDineroRiesgo += multaParada;
@@ -104,7 +110,7 @@ export const calcularRiesgosSla = (viajesSeguros) => {
     v._riesgo_dinamico = atrasosDinamicosViaje;
   });
 
-  return { riesgosSla, totalDineroEnCalle, totalDineroRiesgo };
+  return { riesgosSla, totalDineroEnCalle, totalDineroRiesgo, totalParadasAbiertas };
 };
 
 // ---------------------------------------------------------------------------

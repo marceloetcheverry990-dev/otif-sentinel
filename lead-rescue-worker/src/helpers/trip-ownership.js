@@ -46,11 +46,50 @@ export function requireMatchingTenant(authPayload, tenant_id) {
   return null;
 }
 
+async function driverAssignedOnOrdenes(supabase, { trip_id, tenant_id, rut, chofer_id }) {
+  let cid = chofer_id ? String(chofer_id) : null;
+  if (!cid && rut) {
+    const { data: ch } = await supabase
+      .from('choferes')
+      .select('chofer_id')
+      .eq('tenant_id', tenant_id)
+      .eq('rut', rut)
+      .maybeSingle();
+    cid = ch?.chofer_id ? String(ch.chofer_id) : null;
+  }
+  if (!cid) return false;
+
+  const { data: ord } = await supabase
+    .from('ordenes_pendientes')
+    .select('ot_id')
+    .eq('trip_id', trip_id)
+    .eq('tenant_id', tenant_id)
+    .eq('chofer_asignado_id', cid)
+    .limit(1)
+    .maybeSingle();
+  return Boolean(ord);
+}
+
+async function driverRecentTripActivity(supabase, { trip_id, tenant_id, rut }) {
+  if (!rut) return false;
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data } = await supabase
+    .from('bitacora_viajes')
+    .select('id')
+    .eq('trip_id', trip_id)
+    .eq('tenant_id', tenant_id)
+    .eq('rut_chofer', rut)
+    .gte('created_at', since)
+    .limit(1)
+    .maybeSingle();
+  return Boolean(data);
+}
+
 /**
- * Supabase client: verify trip is assigned to driver rut in tenant.
+ * Supabase client: verify trip is assigned to driver (flota activa u ordenes).
  * @returns {Promise<Response|null>}
  */
-export async function assertDriverOwnsTrip(supabase, { trip_id, tenant_id, rut }) {
+export async function assertDriverOwnsTrip(supabase, { trip_id, tenant_id, rut, chofer_id }) {
   const { data, error } = await supabase
     .from('flota_vehiculos')
     .select('rut_chofer_asignado')
@@ -59,8 +98,28 @@ export async function assertDriverOwnsTrip(supabase, { trip_id, tenant_id, rut }
     .eq('rut_chofer_asignado', rut)
     .maybeSingle();
 
-  if (error || !data) return tripNotAssignedResponse();
-  return null;
+  if (!error && data) return null;
+
+  if (await driverAssignedOnOrdenes(supabase, { trip_id, tenant_id, rut, chofer_id })) {
+    return null;
+  }
+
+  return tripNotAssignedResponse();
+}
+
+/**
+ * Chat / lectura post-viaje: flota, ordenes o actividad reciente del chofer.
+ * @returns {Promise<Response|null>}
+ */
+export async function assertDriverCanAccessTrip(supabase, { trip_id, tenant_id, rut, chofer_id }) {
+  const err = await assertDriverOwnsTrip(supabase, { trip_id, tenant_id, rut, chofer_id });
+  if (!err) return null;
+
+  if (await driverRecentTripActivity(supabase, { trip_id, tenant_id, rut })) {
+    return null;
+  }
+
+  return tripNotAssignedResponse();
 }
 
 /**
@@ -93,6 +152,7 @@ export async function assertDriverCanMutateStop(supabase, authPayload, { tenant_
     trip_id,
     tenant_id,
     rut: authPayload.rut,
+    chofer_id: authPayload.chofer_id || null,
   });
   if (tripErr) return { ok: false, response: tripErr };
 

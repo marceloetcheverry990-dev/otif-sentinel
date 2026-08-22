@@ -33,6 +33,7 @@ El modelo de datos (`ordenes_pendientes` con OC/cliente) ya asume tenant = vende
 Trigger oficial: hora de emisión = hora de **inicio del traslado** → primera `SALIDA` del `trip_id`, con `evento_ts_device` validado.
 
 Proveedor DTE: **SimpleAPI o Lioren** (nunca BaseAPI). Siempre detrás de `EmisorDTE`.
+Lioren: HTTP `POST {LIOREN_BASE_URL}{LIOREN_DTE_PATH}` (default `https://www.lioren.cl/api/dtes`) con Bearer `dte_api_token` / `LIOREN_TOKEN`.
 
 ---
 

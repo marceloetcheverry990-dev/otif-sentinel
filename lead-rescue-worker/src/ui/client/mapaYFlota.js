@@ -3,7 +3,97 @@
 // Extraído de src/ui.js Script #2 (Fase 3, Req 4). No ejecutar en el Worker.
 
 export const MAPA_FLOTA_SCRIPT = `
-        let osrmAbortController = null;
+        let routeGeomAbort = null;
+        let routeDrawGen = 0;
+        const routeGeomCache = new Map();
+        window._snappedTrips = window._snappedTrips || {};
+
+        function yieldToUI() {
+          return new Promise(function(resolve) {
+            if (typeof requestAnimationFrame === 'function') {
+              requestAnimationFrame(function() { setTimeout(resolve, 0); });
+            } else {
+              setTimeout(resolve, 0);
+            }
+          });
+        }
+
+        function routeGeomKey(coords) {
+          return coords.map(function(p) {
+            return Number(p[0]).toFixed(5) + ',' + Number(p[1]).toFixed(5);
+          }).join(';');
+        }
+
+        function dist2LatLng(a, b) {
+          var dlat = Number(a[0]) - Number(b[0]);
+          var dlng = Number(a[1]) - Number(b[1]);
+          return dlat * dlat + dlng * dlng;
+        }
+
+        function splitSnappedRoundTrip(snapped, lastStop, depot) {
+          if (!Array.isArray(snapped) || snapped.length < 4 || !lastStop) {
+            return { outbound: snapped, ret: null };
+          }
+          var n = snapped.length;
+          var from = Math.max(1, Math.floor(n * 0.08));
+          var to = Math.max(from + 1, Math.floor(n * 0.92));
+          var bestI = from;
+          var best = Infinity;
+          for (var i = from; i < to; i++) {
+            var d = dist2LatLng(snapped[i], lastStop);
+            if (d < best) { best = d; bestI = i; }
+          }
+          if (depot && dist2LatLng(snapped[bestI], depot) < 1e-7) {
+            return { outbound: snapped, ret: null };
+          }
+          var outbound = snapped.slice(0, bestI + 1);
+          var ret = snapped.slice(bestI);
+          if (outbound.length < 2 || ret.length < 2) {
+            return { outbound: snapped, ret: null };
+          }
+          return { outbound: outbound, ret: ret };
+        }
+
+        async function fetchSnappedRoute(latlngs, signal) {
+          var key = routeGeomKey(latlngs);
+          if (routeGeomCache.has(key)) return routeGeomCache.get(key);
+          if (!window._routeGeomInflight) window._routeGeomInflight = {};
+          if (window._routeGeomInflight[key]) return window._routeGeomInflight[key];
+          window._routeGeomInflight[key] = (async function() {
+            try {
+              var res = await fetch('/api/route-geometry', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  coordinates: latlngs,
+                  tenant_id: (CONFIG && CONFIG.tenant_id) || window._TENANT_ID || ''
+                }),
+                signal: signal
+              });
+              if (!res.ok) {
+                console.warn('[MAPA] route-geometry HTTP', res.status);
+                return null;
+              }
+              var data = await res.json();
+              if (data.fallback) {
+                console.warn('[MAPA] route-geometry fallback (sin snap a calles)');
+                return null;
+              }
+              var snapped = Array.isArray(data.coordinates) && data.coordinates.length > 1
+                ? data.coordinates : null;
+              if (snapped) routeGeomCache.set(key, snapped);
+              return snapped;
+            } catch (e) {
+              if (e && e.name === 'AbortError') return null;
+              console.warn('[MAPA] route-geometry', e && e.message);
+              return null;
+            } finally {
+              if (window._routeGeomInflight) delete window._routeGeomInflight[key];
+            }
+          })();
+          return window._routeGeomInflight[key];
+        }
 
         const truckMarkers = {}; 
         const truckIcon = L.divIcon({ 
@@ -60,15 +150,17 @@ export const MAPA_FLOTA_SCRIPT = `
         }
 
         async function dibujarRutaEnMapa(safeTripId) {
-          if (osrmAbortController) {
-             osrmAbortController.abort();
+          if (safeTripId && window._drawingTrip === safeTripId) {
+            return;
           }
-          osrmAbortController = new AbortController();
-          const { signal } = osrmAbortController;
+          const drawGen = ++routeDrawGen;
+          if (routeGeomAbort && window._drawingTrip && window._drawingTrip !== safeTripId) {
+            try { routeGeomAbort.abort(); } catch (_) {}
+          }
+          routeGeomAbort = new AbortController();
+          const { signal } = routeGeomAbort;
+          window._drawingTrip = safeTripId || null;
           try {
-            // Siempre limpiar la capa activa al cambiar/cerrar trip.
-            // (Antes solo limpiaba si activeTripId !== safeTripId, pero el Proxy
-            // ya setea activeTripId antes de llamar a esta función → se mezclaban.)
             layerViajeActivo.clearLayers();
 
             if (!safeTripId) {
@@ -76,7 +168,7 @@ export const MAPA_FLOTA_SCRIPT = `
               return;
             }
 
-            if (mapLayersCache.has(safeTripId)) {
+            if (mapLayersCache.has(safeTripId) && window._snappedTrips && window._snappedTrips[safeTripId]) {
                 const cachedLayers = mapLayersCache.get(safeTripId);
                 cachedLayers.forEach(layer => layer.addTo(layerViajeActivo));
                 const cachedBounds = mapBoundsCache.get(safeTripId);
@@ -176,11 +268,9 @@ export const MAPA_FLOTA_SCRIPT = `
             if (appState.activeTripId !== safeTripId) return;
             
             const coordsDirectas = [];
-            const osrmCoords = [];
             
             if (Number.isFinite(CONFIG.BODEGA.LAT) && Number.isFinite(CONFIG.BODEGA.LNG)) {
                 coordsDirectas.push([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
-                osrmCoords.push(CONFIG.BODEGA.LNG + ',' + CONFIG.BODEGA.LAT);
             }
 
             const newLayers = [];
@@ -212,7 +302,6 @@ export const MAPA_FLOTA_SCRIPT = `
               }
 
               coordsDirectas.push([finalLat, finalLng]);
-              osrmCoords.push(finalLng + ',' + finalLat); 
               
               const isLate = Boolean(p.eta && p.fecha_hora_sla && new Date(p.eta).getTime() > new Date(p.fecha_hora_sla).getTime());
               
@@ -226,86 +315,78 @@ export const MAPA_FLOTA_SCRIPT = `
               newLayers.push(marker);
             });
 
-            const routeStyle = {color: CONFIG.UI.COLORS.NEUTRAL, weight: 4, opacity: 0.7, dashArray: '8, 8'};
-            let finalRouteCoords = coordsDirectas;
-
-            if (osrmCoords.length >= 2 && osrmCoords.length <= 100) {
-                try {
-                  const timeoutId = setTimeout(() => osrmAbortController.abort(), 3000); 
-                  const url = 'https://router.project-osrm.org/route/v1/driving/' + osrmCoords.join(';') + '?overview=full&geometries=geojson';
-                  const response = await fetch(url, { signal });
-                  clearTimeout(timeoutId);
-                  
-                  if (response.ok) {
-                      const data = await response.json();
-                      if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
-                          finalRouteCoords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
-                      }
-                  } else {
-                      console.warn("OSRM: Fallo en API, aplicando Graceful Degradation (línea recta).");
-                  }
-                } catch (error) {
-                  // Abort/timeout: seguir con línea recta (no dejar el mapa vacío — T7)
-                  console.warn("OSRM: Timeout/Abort/Red — Graceful Degradation (línea recta).", error && error.message);
-                }
-            }
-
-            if (appState.activeTripId !== safeTripId) return;
-
-            if (finalRouteCoords.length > 1) {
-              newLayers.push(L.polyline(finalRouteCoords, routeStyle));
-            }
-
+            const skeletonStyle = {color: CONFIG.UI.COLORS.NEUTRAL, weight: 4, opacity: 0.45, dashArray: '8, 8'};
+            const streetStyle = {color: CONFIG.UI.COLORS.NEUTRAL, weight: 5, opacity: 0.9};
+            const returnStyle = { color: '#94a3b8', weight: 4, opacity: 0.7, dashArray: '5, 10' };
+            let outboundLine = null;
+            let returnLine = null;
             if (coordsDirectas.length > 1) {
-                const lastStopCoords = coordsDirectas[coordsDirectas.length - 1]; 
-                const returnStyle = { color: '#94a3b8', weight: 4, opacity: 0.7, dashArray: '5, 10' };
-                
-                let returnRouteCoords = [lastStopCoords, [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]];
-
-                try {
-                  // Si el tramo ida abortó el controller, crear uno nuevo para el retorno
-                  if (!osrmAbortController || osrmAbortController.signal.aborted) {
-                    osrmAbortController = new AbortController();
-                  }
-                  const signalRet = osrmAbortController.signal;
-                  const timeoutRet = setTimeout(() => osrmAbortController.abort(), 3000); 
-                  const urlRet = 'https://router.project-osrm.org/route/v1/driving/' + lastStopCoords[1] + ',' + lastStopCoords[0] + ';' + CONFIG.BODEGA.LNG + ',' + CONFIG.BODEGA.LAT + '?overview=full&geometries=geojson';
-                  const responseRet = await fetch(urlRet, { signal: signalRet });
-                  clearTimeout(timeoutRet);
-
-                  if (responseRet.ok) {
-                      const dataRet = await responseRet.json();
-                      if (dataRet.code === 'Ok' && dataRet.routes && dataRet.routes.length > 0) {
-                          returnRouteCoords = dataRet.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
-                      }
-                  }
-                } catch (error) {
-                  console.warn("OSRM Retorno: Timeout/Abort/Red — línea recta.", error && error.message);
-                }
-
-                if (appState.activeTripId !== safeTripId) return;
-                newLayers.push(L.polyline(returnRouteCoords, returnStyle));
+              outboundLine = L.polyline(coordsDirectas, skeletonStyle);
+              newLayers.push(outboundLine);
+            }
+            if (coordsDirectas.length > 1) {
+              const lastStopCoords = coordsDirectas[coordsDirectas.length - 1];
+              returnLine = L.polyline([lastStopCoords, [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]], returnStyle);
+              newLayers.push(returnLine);
             }
 
-            if (appState.activeTripId !== safeTripId) return;
+            if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
 
-            // Pintar todo de una vez sobre capa limpia (evita mezclar trips)
             layerViajeActivo.clearLayers();
             newLayers.forEach(function(layer) { layer.addTo(layerViajeActivo); });
 
             if (newLayers.length > 0) {
               const bounds = L.featureGroup(newLayers).getBounds().extend([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
               if (bounds.isValid()) {
-                mapLayersCache.set(safeTripId, newLayers);
-                mapBoundsCache.set(safeTripId, bounds);
                 map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
               } else {
                 console.warn("[DEFENSIVO] Leaflet bounds inválidos calculados para el viaje", safeTripId);
               }
             }
 
+            await yieldToUI();
+            if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
+
+            var tour = coordsDirectas.slice();
+            if (tour.length >= 1) {
+              var last = tour[tour.length - 1];
+              if (!last || last[0] !== CONFIG.BODEGA.LAT || last[1] !== CONFIG.BODEGA.LNG) {
+                tour.push([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
+              }
+            }
+            if (tour.length >= 2) {
+              var snapped = await fetchSnappedRoute(tour, signal);
+              if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
+              if (snapped && snapped.length > 1) {
+                try { if (outboundLine) layerViajeActivo.removeLayer(outboundLine); } catch (_) {}
+                try { if (returnLine) layerViajeActivo.removeLayer(returnLine); } catch (_) {}
+                for (var li = newLayers.length - 1; li >= 0; li--) {
+                  if (newLayers[li] === outboundLine || newLayers[li] === returnLine) newLayers.splice(li, 1);
+                }
+                var lastStop = coordsDirectas[coordsDirectas.length - 1];
+                var depotLL = [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG];
+                var parts = splitSnappedRoundTrip(snapped, lastStop, depotLL);
+                outboundLine = L.polyline(parts.outbound, streetStyle);
+                outboundLine.addTo(layerViajeActivo);
+                newLayers.push(outboundLine);
+                if (parts.ret && parts.ret.length > 1) {
+                  returnLine = L.polyline(parts.ret, returnStyle);
+                  returnLine.addTo(layerViajeActivo);
+                  newLayers.push(returnLine);
+                }
+                window._snappedTrips[safeTripId] = true;
+                var snapBounds = L.featureGroup(newLayers).getBounds().extend([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
+                if (snapBounds.isValid()) {
+                  mapLayersCache.set(safeTripId, newLayers);
+                  mapBoundsCache.set(safeTripId, snapBounds);
+                }
+              }
+            }
+
           } catch (error) {
             console.error("[DEFENSIVO] Fallo crítico al dibujar ruta en mapa:", error);
+          } finally {
+            if (window._drawingTrip === safeTripId) window._drawingTrip = null;
           }
         }
         async function rastrearFlotaEnVivo() {
@@ -352,4 +433,17 @@ export const MAPA_FLOTA_SCRIPT = `
             console.error("Falla silenciosa en telemetría GPS:", err);
           }
         }
+
+        (function wrapInvalidateMapCache() {
+          var prev = window.invalidateMapCache;
+          window.invalidateMapCache = function(safeTripId) {
+            if (typeof prev === 'function') prev(safeTripId);
+            if (!safeTripId) {
+              routeGeomCache.clear();
+              window._snappedTrips = {};
+            } else if (window._snappedTrips) {
+              delete window._snappedTrips[safeTripId];
+            }
+          };
+        })();
 `;

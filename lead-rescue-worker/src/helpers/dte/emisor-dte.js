@@ -5,6 +5,7 @@
 // Cambiar de proveedor = cambiar DTE_PROVIDER / tenant_settings.dte_provider.
 
 import { isDteStubForbidden } from './resolve-dte-env.js';
+import { mapPayloadToSimpleAPI } from './simpleapi-client.js';
 
 /**
  * @typedef {object} GuiaDespachoPayload
@@ -107,11 +108,13 @@ export class StubEmisorDTE extends EmisorDTE {
         proveedor: 'stub',
       };
     }
+    // Respuesta con cuerpo tipo 52 completo (misma forma que SimpleAPI) para portar/imprimir en staging.
+    const dte52 = mapPayloadToSimpleAPI(payload, this.env || {});
     return {
       estado: 'STUB',
       folio: null,
       track_id: null,
-      respuesta: { stub: true, ot_id: payload.ot_id },
+      respuesta: { stub: true, ot_id: payload.ot_id, tipoDTE: 52, dte52 },
       error: null,
       proveedor: 'stub',
     };
@@ -143,7 +146,7 @@ export class SimpleAPIEmisor extends EmisorDTE {
   }
 }
 
-/** Placeholder Lioren */
+/** Lioren REST — activar con DTE_PROVIDER=lioren + dte_api_token (tenant) o LIOREN_TOKEN */
 export class LiorenEmisor extends EmisorDTE {
   constructor(env) {
     super();
@@ -163,14 +166,8 @@ export class LiorenEmisor extends EmisorDTE {
         proveedor: 'lioren',
       };
     }
-    return {
-      estado: 'ERROR',
-      folio: null,
-      track_id: null,
-      respuesta: null,
-      error: 'LiorenEmisor: integración HTTP pendiente (sandbox)',
-      proveedor: 'lioren',
-    };
+    const { postGuiaLioren } = await import('./lioren-client.js');
+    return postGuiaLioren(payload, this.env);
   }
 }
 

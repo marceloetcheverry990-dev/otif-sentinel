@@ -1,4 +1,4 @@
-﻿/**
+/**
  * OTIF SENTINEL - SUPPLY CHAIN CONTINGENCY ENGINE
  * V8.0.0 - APEX RELEASE (Modular Architecture)
  * * Archivo Principal (Orquestador / Router)
@@ -31,8 +31,10 @@ import {
 } from './api/platform-ingest-webhook.js';
 import { optimizarRutas } from './api/optimizer.js';
 import { reoptimizarMidday } from './api/reoptimizar-midday.js';
+import { recalcularRuteo } from './api/recalcular-ruteo.js';
 import { syncExcel } from './api/sync.js';
 import { renderReporte, renderControlTower, getControlTowerViajesAPI } from './api/dashboard.js';
+import { getRouteGeometry } from './api/route-geometry.js';
 import {
   getRescueCandidates,
   confirmRescue,
@@ -63,6 +65,8 @@ import {
   adminQaApplySchema,
   adminQaDteSettings,
   adminQaCleanup,
+  adminQaVideoPrep,
+  adminQaResetMyDemoTrip,
 } from './api/admin-qa.js';
 
 // ---> NUEVAS IMPORTACIONES: APP MÃ“VIL Y TORRE DE CONTROL <---
@@ -92,6 +96,7 @@ import {
   verifySameOrigin,
 } from './helpers/operator-auth.js';
 import { writeAuditLog, operatorAuditContext } from './helpers/audit-log.js';
+import { applySecurityHeaders } from './helpers/security-headers.js';
 
 // Regla #3: Cabeceras CORS estrictas y centralizadas â€” importadas desde config.js
 // CORS_HEADERS es la Ãºnica fuente de verdad. No definir corsHeaders localmente en ningÃºn mÃ³dulo.
@@ -170,6 +175,7 @@ async function runOperatorMutation(request, env, ctx, action, handler) {
 export default {
   async fetch(request, env, ctx) {
     return withCorsContext(request, env, async () => {
+    const routed = await (async () => {
     const url = new URL(request.url);
 
     // --- ESCUDO GLOBAL CORS (PREFLIGHT) ---
@@ -197,32 +203,44 @@ export default {
     // Monitoring dashboard - requires authentication
     // Task 7.4 - Dashboard HTML interface
     if (request.method === "GET" && url.pathname === "/dashboard/monitoring") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
       return renderDashboard(request, env);
     }
     
     // Monitoring dashboard data API - requires authentication
     // Task 7.4 - JSON API for dashboard data
     if (request.method === "GET" && url.pathname === "/api/dashboard/data") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
       return getDashboardData(request, env);
     }
     
     // Executive dashboard HTML - Business Intelligence
     if (request.method === "GET" && url.pathname === "/dashboard/executive") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
       return renderExecutiveDashboard(request, env);
     }
     
     // Executive dashboard data API - Business KPIs
     if (request.method === "GET" && url.pathname === "/api/dashboard/executive") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
       return getExecutiveDashboardData(request, env);
     }
 
     // Operational dashboard HTML - Logistics Operations Panel
     if (request.method === "GET" && url.pathname === "/dashboard/operaciones") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
       return renderDashboardOperaciones(request, env);
     }
 
     // Operational dashboard data API - Logistics KPIs (kg, OTIF, rutas, camionetas)
     if (request.method === "GET" && url.pathname === "/api/dashboard/operational") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
       return getOperationalDashboardData(request, env);
     }
 
@@ -282,7 +300,8 @@ export default {
     if (request.method === "POST" && url.pathname === "/api/choferes/activate") return activateChofer(request, env, ctx);
     if (url.pathname.startsWith('/api/chat')) return handleChat(request, env);
     if (request.method === "POST" && url.pathname === "/api/upload-evidence") return handleUploadEvidence(request, env);
-    if (url.pathname === '/api/mobile-sync' && request.method === 'POST') { return handleMobileSync(request, env);}
+    if (request.method === "POST" && url.pathname === "/api/choferes/reset-demo") return adminQaResetMyDemoTrip(request, env);
+    if (url.pathname === '/api/mobile-sync' && request.method === 'POST') { return handleMobileSync(request, env, ctx);}
     
     // ---> RUTAS PÃšBLICAS: PORTAL DE TRACKING COMPARTIBLE <---
     if (request.method === "POST" && url.pathname === "/api/public-route/generate") {
@@ -353,11 +372,21 @@ export default {
         adminQaCleanup(req, e, op)
       );
     }
+    if (url.pathname === "/api/admin/qa/video-prep" && (request.method === "GET" || request.method === "POST")) {
+      if (request.method === "GET") {
+        const access = await requireOperatorAccess(request, env);
+        if (!access.ok) return access.response;
+        return adminQaVideoPrep(request, env, access.payload);
+      }
+      return runOperatorMutation(request, env, ctx, 'qa.video_prep', (req, e, op) =>
+        adminQaVideoPrep(req, e, op)
+      );
+    }
     if (request.method === 'POST' && url.pathname === '/api/gps/ping') return handleGPSPing(request, env, ctx);
     if (request.method === 'GET'  && url.pathname === '/api/gps/live') {
       const access = await requireOperatorAccess(request, env);
       if (!access.ok) return access.response;
-      return getLiveFleet(request, env, ctx);
+      return getLiveFleet(request, env, ctx, access.payload);
     }
     // Alias bajo /api/gps/*: Cloudflare Access bypassea GPS (app móvil); la Torre
     // usa este path para asignar chofer sin chocar con el 302 de Access → Failed to fetch.
@@ -412,7 +441,12 @@ export default {
     if (request.method === "GET" && url.pathname === "/api/control-tower-viajes") {
       const access = await requireOperatorAccess(request, env);
       if (!access.ok) return access.response;
-      return getControlTowerViajesAPI(request, env, ctx);
+      return getControlTowerViajesAPI(request, env, ctx, access.payload);
+    }
+    if (request.method === "POST" && url.pathname === "/api/route-geometry") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
+      return getRouteGeometry(request, env, access.payload);
     }
 
     // --- API REST (Botones y acciones internas del sistema) ---
@@ -429,6 +463,11 @@ export default {
     if (request.method === "POST" && url.pathname === "/api/reoptimizar-midday") {
       return runOperatorMutation(request, env, ctx, 'routes.reoptimize_midday', (req, e, op) =>
         reoptimizarMidday(req, e, ctx, op)
+      );
+    }
+    if (request.method === "POST" && url.pathname === "/api/recalcular-ruteo") {
+      return runOperatorMutation(request, env, ctx, 'routes.recalculate', (req, e, op) =>
+        recalcularRuteo(req, e, ctx, op)
       );
     }
     if (request.method === "GET" && url.pathname === "/api/lead-rescue/candidates") {
@@ -520,6 +559,8 @@ export default {
         status: 404, 
         headers: { ...CORS_HEADERS, "Content-Type": "application/json" } 
     });
+    })();
+    return applySecurityHeaders(routed);
     });
   },
   

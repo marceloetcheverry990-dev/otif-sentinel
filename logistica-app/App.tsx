@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Location from 'expo-location';
@@ -17,10 +17,13 @@ import { BACKGROUND_LOCATION_TASK } from './src/services/locationTask';
 const Stack = createNativeStackNavigator();
 
 export default function App() {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, gpsInterval } = useAuthStore();
 
   // 2. LÓGICA DE PERMISOS ESTRICTOS Y ARRANQUE DE GPS
   useEffect(() => {
+    const pingSeconds = Math.min(300, Math.max(15, Number(gpsInterval) || 60));
+    const pingMs = pingSeconds * 1000;
+
     // Al cerrar sesión: detener GPS incondicionalmente y purgar datos locales
     const stopTrackingAndCleanup = async () => {
       try {
@@ -38,6 +41,7 @@ export default function App() {
 
     const startBackgroundTracking = async () => {
       if (!isAuthenticated) return;
+      if (Platform.OS === 'web') return;
 
       try {
         // A. Permiso en Primer Plano (OBLIGATORIO PRIMERO)
@@ -54,18 +58,24 @@ export default function App() {
           return;
         }
 
-        // C. Arrancar el Foreground Service de Android
+        // C. Arrancar (o reiniciar) el Foreground Service de Android
+        const started = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        if (started) {
+          await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        }
+
         await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
-          accuracy: Location.Accuracy.Balanced, // Balance entre batería y precisión
-          timeInterval: 60000, // Actualizar cada 60 segundos
-          distanceInterval: 50, // O cada 50 metros
-          showsBackgroundLocationIndicator: true, // Obligatorio en Android 14+
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: pingMs,
+          distanceInterval: 50,
+          showsBackgroundLocationIndicator: true,
           foregroundService: {
             notificationTitle: "Logística Activa",
             notificationBody: "Compartiendo ubicación con la central...",
             notificationColor: "#0056D2",
           },
         });
+        console.log(`📡 GPS intervalo: ${pingSeconds}s`);
       } catch (err) {
         console.error("Error al iniciar tracking:", err);
       }
@@ -76,7 +86,7 @@ export default function App() {
     } else {
       stopTrackingAndCleanup();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, gpsInterval]);
 
   return (
     <NavigationContainer>

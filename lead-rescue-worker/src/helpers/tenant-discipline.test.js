@@ -27,6 +27,7 @@ const HANDLER_SOURCES = import.meta.glob(
     '../api/depots.js',
     '../api/eta-accuracy.js',
     '../api/reoptimizar-midday.js',
+    '../api/recalcular-ruteo.js',
   ],
   { query: '?raw', import: 'default', eager: true }
 );
@@ -48,8 +49,8 @@ describe('requireTenantId (fail-closed)', () => {
 });
 
 describe('D4 checklist: handlers sensibles usan requireTenantId', () => {
-  it('carga los 16 handlers sensibles', () => {
-    expect(Object.keys(HANDLER_SOURCES).length).toBe(16);
+  it('carga los 17 handlers sensibles', () => {
+    expect(Object.keys(HANDLER_SOURCES).length).toBe(17);
   });
 
   for (const [path, src] of Object.entries(HANDLER_SOURCES)) {

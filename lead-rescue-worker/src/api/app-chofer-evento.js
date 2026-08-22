@@ -27,6 +27,8 @@ import { enqueueCustomerNotify } from '../helpers/customer-notify.js';
 import { getTenantSettings } from '../helpers/tenant-settings.js';
 import { emitGuiasForTrip } from '../helpers/dte/emit-on-salida.js';
 import { resolveEventTimestamp } from '../helpers/event-timestamp.js';
+import { insertBitacoraEvent } from '../helpers/bitacora-insert.js';
+import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 import {
   assertDriverCanMutateStop,
   requireMatchingTenant,
@@ -39,6 +41,62 @@ const jsonRes = (body, status = 200) =>
     status,
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
+
+const CLOSED_STOPS = new Set([
+  'ENTREGADO', 'RECHAZADO', 'CANCELADO_PLANILLA', 'RETORNO_BODEGA',
+]);
+
+/**
+ * Si no quedan paradas abiertas, libera flota + chofer (mismo criterio que app-chofer-sync).
+ * Evita GPS/dead-man en viajes ya terminados.
+ */
+async function maybeReleaseFleetIfTripDone(supabase, {
+  tenant_id, trip_id, chofer_id = null,
+}) {
+  const { data: stops, error } = await supabase
+    .from('ordenes_pendientes')
+    .select('ot_id, estado_operacional')
+    .eq('trip_id', trip_id)
+    .eq('tenant_id', tenant_id);
+  if (error) {
+    console.warn('[RELEASE_FLEET] count', error.message);
+    return false;
+  }
+  const open = (stops || []).some(
+    (o) => !CLOSED_STOPS.has(String(o.estado_operacional || '').toUpperCase())
+  );
+  if (open) return false;
+
+  const { error: errFleet } = await supabase
+    .from('flota_vehiculos')
+    .update({ trip_id_actual: null, estado: 'DISPONIBLE' })
+    .eq('tenant_id', tenant_id)
+    .eq('trip_id_actual', trip_id);
+  if (errFleet) console.warn('[RELEASE_FLEET] flota', errFleet.message);
+
+  if (chofer_id) {
+    const { error: errCh } = await supabase
+      .from('choferes')
+      .update({ estado: 'DISPONIBLE' })
+      .eq('tenant_id', tenant_id)
+      .eq('chofer_id', chofer_id);
+    if (errCh) console.warn('[RELEASE_FLEET] chofer', errCh.message);
+  }
+
+  await supabase
+    .from('fleet_alerts')
+    .update({ status: 'RESOLVED', updated_at: new Date().toISOString() })
+    .eq('tenant_id', tenant_id)
+    .eq('trip_id', trip_id)
+    .in('status', ['OPEN', 'ACKED'])
+    .in('alert_type', ['STUCK_VEHICLE', 'SIGNAL_LOST'])
+    .then(({ error: e }) => {
+      if (e && e.code !== '42P01') console.warn('[RELEASE_FLEET] alerts', e.message);
+    })
+    .catch(() => {});
+
+  return true;
+}
 
 // ─── Motor de ruteo (funciones puras) ────────────────────────────────────────
 
@@ -132,6 +190,12 @@ export async function handleChoferEvento(request, env, ctx) {
         tenantSettings,
         orderMetadata: metaEarly,
       });
+      if (metaEarly.origen === 'RUTA_RAPIDA') {
+        podReq = resolvePodRequirements({
+          tenantSettings: { pod_requirements: { foto: false, firma: false, scan: false, notas: false } },
+          orderMetadata: metaEarly,
+        });
+      }
       if (podReq.foto && !foto_url) {
         return jsonRes({ error: 'Operación denegada: La ENTREGA requiere foto_url (POD)', code: 'foto_required' }, 400);
       }
@@ -216,10 +280,42 @@ export async function handleChoferEvento(request, env, ctx) {
 
       if (errLlegada) throw new Error(`LLEGADA DB error: ${errLlegada.message}`);
 
-      await supabase.from('bitacora_viajes').insert([{
-        tenant_id, trip_id, stop_id, tipo_evento: 'LLEGADA', latitud, longitud,
-        created_at: timestamp, server_received_at,
-      }]);
+      await insertBitacoraEvent(supabase, {
+        tenant_id,
+        trip_id,
+        stop_id,
+        rut_chofer: auth.payload.rut,
+        tipo_evento: 'LLEGADA',
+        created_at: timestamp,
+        server_received_at,
+      });
+
+      invalidateTowerPoll(tenant_id);
+
+      // Si la Torre ya dejó el viaje EN_RUTA (sin "Comenzar ruta"), emitir guías
+      // en la primera LLEGADA del viaje (idempotente: STUB/EMITIDA se saltan).
+      ctx.waitUntil((async () => {
+        try {
+          const { count } = await supabase
+            .from('bitacora_viajes')
+            .select('id', { count: 'exact', head: true })
+            .eq('tenant_id', tenant_id)
+            .eq('trip_id', trip_id)
+            .eq('tipo_evento', 'LLEGADA');
+          if ((count || 0) <= 1) {
+            await emitGuiasForTrip(env, supabase, {
+              tenant_id,
+              trip_id,
+              fecha_emision_iso: timestamp,
+              rut_chofer: auth.payload.rut,
+              mode: 'salida',
+              ts_source: resolvedTs.source === 'device' ? 'device' : resolvedTs.source,
+            });
+          }
+        } catch (e) {
+          console.warn('[DTE_EMIT_LLEGADA]', e.message);
+        }
+      })());
 
       return jsonRes({ exito: true, mensaje: 'Llegada registrada. Reloj SLA congelado.' });
     }
@@ -283,12 +379,19 @@ export async function handleChoferEvento(request, env, ctx) {
         return jsonRes({ exito: true, duplicate: true, mensaje: 'OT ya procesada anteriormente' });
       }
 
-      await supabase.from('bitacora_viajes').insert([{
-        tenant_id, trip_id, stop_id, tipo_evento: 'ENTREGA',
-        evidencia_url: foto_url, latitud, longitud,
-        created_at: timestamp, server_received_at,
+      await insertBitacoraEvent(supabase, {
+        tenant_id,
+        trip_id,
+        stop_id,
+        rut_chofer: auth.payload.rut,
+        tipo_evento: 'ENTREGA',
+        evidencia_url: foto_url || null,
+        created_at: timestamp,
+        server_received_at,
         mensaje: `scan:${codigoNorm}`,
-      }]);
+      });
+
+      invalidateTowerPoll(tenant_id);
 
       ctx.waitUntil(insertEtaMetric(supabase, {
         tenant_id,
@@ -336,6 +439,14 @@ export async function handleChoferEvento(request, env, ctx) {
           .catch((e) => console.warn('[DTE_FECHA_LLEGADA]', e.message))
       );
 
+      ctx.waitUntil(
+        maybeReleaseFleetIfTripDone(supabase, {
+          tenant_id,
+          trip_id,
+          chofer_id: choferIdAuth || entregaRes.chofer_asignado_id || null,
+        }).catch((e) => console.warn('[RELEASE_FLEET]', e.message))
+      );
+
       return jsonRes({ exito: true, mensaje: 'Entrega confirmada con POD.' });
     }
 
@@ -358,11 +469,29 @@ export async function handleChoferEvento(request, env, ctx) {
         isFirstSalida = false;
       }
 
-      const { error: errSalida } = await supabase.from('bitacora_viajes').insert([{
-        tenant_id, trip_id, stop_id, tipo_evento: 'SALIDA', latitud, longitud,
-        created_at: timestamp, server_received_at,
-      }]);
-      if (errSalida) throw new Error(`SALIDA DB error: ${errSalida.message}`);
+      const salidaInsert = await insertBitacoraEvent(supabase, {
+        tenant_id,
+        trip_id,
+        stop_id: stop_id || null,
+        rut_chofer: auth.payload.rut,
+        tipo_evento: 'SALIDA',
+        created_at: timestamp,
+        server_received_at,
+      });
+      if (salidaInsert.error) {
+        const msg = `${salidaInsert.error.code || ''} ${salidaInsert.error.message || ''}`;
+        if (/23505|duplicate|unique/i.test(msg)) {
+          return jsonRes({ exito: true, duplicate: true, mensaje: 'Salida ya registrada anteriormente' });
+        }
+        console.error('[SALIDA_BITACORA]', salidaInsert.error.message || salidaInsert.error);
+        return jsonRes({
+          exito: false,
+          error: 'No se pudo registrar la salida en bitácora',
+          code: 'salida_bitacora_failed',
+        }, 500);
+      }
+
+      invalidateTowerPoll(tenant_id);
 
       if (isFirstSalida) {
         // Res. 154: hora de emisión = hora de inicio del traslado = SALIDA (reloj device)
@@ -569,11 +698,19 @@ export async function handleChoferEvento(request, env, ctx) {
         return jsonRes({ exito: true, duplicate: true, mensaje: 'OT ya procesada anteriormente' });
       }
 
-      await supabase.from('bitacora_viajes').insert([{
-        tenant_id, trip_id, stop_id, tipo_evento: 'PROBLEMA',
-        mensaje: payload.razon || null, evidencia_url: foto_url || null,
-        latitud, longitud, created_at: timestamp, server_received_at,
-      }]);
+      await insertBitacoraEvent(supabase, {
+        tenant_id,
+        trip_id,
+        stop_id,
+        rut_chofer: auth.payload.rut,
+        tipo_evento: 'PROBLEMA',
+        mensaje: payload.razon || null,
+        evidencia_url: foto_url || null,
+        created_at: timestamp,
+        server_received_at,
+      });
+
+      invalidateTowerPoll(tenant_id);
 
       ctx.waitUntil(insertEtaMetric(supabase, {
         tenant_id,
@@ -583,6 +720,14 @@ export async function handleChoferEvento(request, env, ctx) {
         orden: problemaRes,
         hora_evento: timestamp,
       }));
+
+      ctx.waitUntil(
+        maybeReleaseFleetIfTripDone(supabase, {
+          tenant_id,
+          trip_id,
+          chofer_id: choferIdAuth || problemaRes?.chofer_asignado_id || null,
+        }).catch((e) => console.warn('[RELEASE_FLEET]', e.message))
+      );
 
       return jsonRes({ exito: true, mensaje: 'Problema registrado.' });
     }

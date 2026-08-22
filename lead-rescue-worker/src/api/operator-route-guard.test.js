@@ -118,6 +118,19 @@ describe('operator route guard', () => {
     expect((await response.json()).code).toBe('tenant_incorrecto');
   });
 
+  it('GET /api/dashboard/executive con tenant_id ajeno → 403 (misma regla que GPS)', async () => {
+    const response = await worker.fetch(
+      new Request('https://worker.test/api/dashboard/executive?tenant_id=otro_tenant', {
+        headers: { Cookie: await operatorCookie() },
+      }),
+      ENV,
+      CTX,
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe('tenant_incorrecto');
+  });
+
   // Defensa en profundidad: GETs de operador deben 401 sin cookie (no depender solo de CF Access)
   for (const path of [
     '/api/depots',

@@ -22,6 +22,72 @@ function extractTypedHouseNumber(text) {
   return all && all.length ? all[all.length - 1] : '';
 }
 
+function normalizeText(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function canonicalLabel(display) {
+  const first = String(display || '').split(',')[0] || '';
+  return normalizeText(first)
+    .replace(/\b(avenida|av|calle|pasaje|psje|camino|ruta|autopista)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenNear(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 4 && b.length >= 4) {
+    if (a.slice(0, 3) === b.slice(0, 3)) return true;
+    if (Math.abs(a.length - b.length) <= 1) {
+      let misses = 0;
+      const max = Math.max(a.length, b.length);
+      for (let i = 0; i < max; i++) {
+        if (a[i] !== b[i]) misses += 1;
+        if (misses > 1) return false;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function fuzzyTokenScore(query, display) {
+  const qTokens = canonicalLabel(query).split(' ').filter(Boolean);
+  const dTokens = canonicalLabel(display).split(' ').filter(Boolean);
+  if (!qTokens.length || !dTokens.length) return 0;
+  let score = 0;
+  for (const qt of qTokens) {
+    for (const dt of dTokens) {
+      if (tokenNear(qt, dt)) {
+        score += qt === dt ? 8 : 5;
+        break;
+      }
+    }
+  }
+  if (dTokens.length > qTokens.length) score -= (dTokens.length - qTokens.length) * 2;
+  return score;
+}
+
+function queryBias(query, item) {
+  const q = canonicalLabel(query);
+  const d = canonicalLabel(item.display);
+  if (!q || !d) return 0;
+  if (d === q) return 40;
+  const fuzzy = fuzzyTokenScore(q, d);
+  if (fuzzy) return fuzzy;
+  if (d.startsWith(q + ' ')) return 18;
+  if (d.endsWith(' ' + q)) return 8;
+  if (d.includes(q)) return -8;
+  return -20;
+}
+
 /**
  * @returns {Promise<Array<{
  *   display: string,
@@ -43,7 +109,7 @@ export async function suggestAddresses(query, env = {}, { limit = 6 } = {}) {
 
   function push(item) {
     if (!item || !Number.isFinite(item.lat) || !Number.isFinite(item.lng)) return;
-    const key = `${item.lat.toFixed(5)},${item.lng.toFixed(5)}|${(item.display || '').toLowerCase()}`;
+    const key = `${canonicalLabel(item.display)}|${normalizeHouse(item.houseNumber)}|${String(item.precision || '')}`;
     if (seen.has(key)) return;
     seen.add(key);
     results.push(item);
@@ -167,6 +233,8 @@ export async function suggestAddresses(query, env = {}, { limit = 6 } = {}) {
     const aMatch = typedHouse && normalizeHouse(a.houseNumber) === normalizeHouse(typedHouse) ? 1 : 0;
     const bMatch = typedHouse && normalizeHouse(b.houseNumber) === normalizeHouse(typedHouse) ? 1 : 0;
     if (bMatch !== aMatch) return bMatch - aMatch;
+    const qb = queryBias(q, b) - queryBias(q, a);
+    if (qb !== 0) return qb;
     const rank = { house: 0, street: 1, place: 2 };
     const ar = rank[a.precision] ?? 3;
     const br = rank[b.precision] ?? 3;

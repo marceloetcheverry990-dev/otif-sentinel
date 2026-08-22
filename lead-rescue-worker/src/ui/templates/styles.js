@@ -221,10 +221,35 @@ export const DASHBOARD_STYLES = `
           flex-shrink: 0;
         }
         .btn-ruta-rapida:hover { opacity: 0.9; }
-        #btnReoptMidday {
+        #btnReoptMidday,
+        #btnRecalcularRuteo {
           max-width: 9.5rem;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+        .recalc-trip-list {
+          max-height: 280px;
+          overflow-y: auto;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 4px 0;
+        }
+        .recalc-trip-item {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          padding: 10px 12px;
+          background: #0f172a;
+          border: 1px solid #334155;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 13px;
+          color: #e2e8f0;
+        }
+        .recalc-trip-item input {
+          margin-top: 2px;
+          accent-color: #3b82f6;
         }
         .btn-dashboards {
           background: linear-gradient(135deg, #10b981, #059669) !important;
@@ -350,6 +375,8 @@ export const DASHBOARD_STYLES = `
         
         /* BACKLOG CARDS */
         .backlog-item { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warning); border-radius: 6px; padding: 1rem; margin-bottom: 0.75rem; }
+        .backlog-item.has-coords { cursor: pointer; }
+        .backlog-item.has-coords:hover { border-color: var(--border-focus); }
         
         /* MAP AREA */
         .map-container { flex: 1; position: relative; background: #e2e8f0; }
@@ -366,6 +393,15 @@ export const DASHBOARD_STYLES = `
           flex-wrap: wrap;
         }
         .lead-rescue-banner[hidden] { display: none !important; }
+        .tower-busy-banner {
+          display: none;
+          align-items: center; justify-content: center;
+          background: #1e3a5f; color: #bae6fd;
+          padding: 0.45rem 1rem; font-size: 0.8rem; font-weight: 600;
+          border-bottom: 1px solid #1d4ed8;
+          z-index: 10040;
+        }
+        .tower-busy-banner:not([hidden]) { display: flex; }
         .lead-rescue-banner.severity-yellow {
           background: linear-gradient(90deg, #78350f 0%, #92400e 50%, #78350f 100%);
           color: #fde68a; border-bottom-color: #b45309;

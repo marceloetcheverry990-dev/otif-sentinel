@@ -4,6 +4,7 @@
 
 import { withDb } from '../db.js';
 import { verifyOperatorToken } from '../helpers/operator-auth.js';
+import { buildExecutiveKpis } from './dashboard-executive-kpis.js';
 
 /**
  * DASHBOARD EJECUTIVO - API
@@ -355,31 +356,7 @@ export async function getExecutiveDashboardData(request, env) {
     const dashboardData = {
       timestamp: new Date().toISOString(),
       period,
-      kpis: {
-        otif: {
-          actual: parseFloat(kpis.otif_actual || 0),
-          anterior: parseFloat(kpis.otif_anterior || 0),
-          cambio: parseFloat(kpis.otif_actual || 0) - parseFloat(kpis.otif_anterior || 0)
-        },
-        entregas: {
-          actual: parseInt(kpis.current_entregas || 0),
-          anterior: parseInt(kpis.previous_entregas || 0),
-          crecimiento: parseFloat(kpis.entregas_growth || 0)
-        },
-        ingresos: {
-          actual: parseFloat(kpis.current_ingresos || 0),
-          anterior: parseFloat(kpis.previous_ingresos || 0),
-          crecimiento: parseFloat(kpis.ingresos_growth || 0)
-        },
-        multas: {
-          actual: parseFloat(kpis.current_multas || 0),
-          anterior: parseFloat(kpis.previous_multas || 0)
-        },
-        kilometros: {
-          totales: parseFloat(kmData.km_totales_mes || 0),
-          promedio: parseFloat(kmData.km_promedio_ruta || 0)
-        }
-      },
+      kpis: buildExecutiveKpis(kpis, kmData, period),
       tendenciaAnual,
       topChoferes,
       topClientes,

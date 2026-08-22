@@ -293,9 +293,33 @@ export async function loadSlaRiskLookups(clientOrSb, {
       }
     }
     biasTenant = await lookupEtaBiasMin(clientOrSb, { tenant_id });
-    for (const cid of [...new Set(choferIds.map(String).filter(Boolean))]) {
-      const b = await lookupEtaBiasMin(clientOrSb, { tenant_id, chofer_id: cid });
-      if (b != null) biasByChofer.set(cid, b);
+    const choferList = [...new Set(choferIds.map(String).filter(Boolean))];
+    if (choferList.length) {
+      try {
+        const biasRes = await clientOrSb.query(
+          `SELECT chofer_id::text AS chofer_id,
+                  AVG(COALESCE(error_viaje_minutos, error_minutos))::float AS bias,
+                  COUNT(*)::int AS n
+           FROM eta_accuracy_metrics
+           WHERE tenant_id = $1
+             AND fecha >= (CURRENT_DATE - 30)
+             AND chofer_id = ANY($2::text[])
+             AND (
+               error_viaje_minutos IS NOT NULL
+               OR arrival_basis = 'llegada'
+             )
+           GROUP BY chofer_id
+           HAVING COUNT(*) >= 5`,
+          [tenant_id, choferList]
+        );
+        for (const row of biasRes.rows || []) {
+          if (row.bias != null) {
+            biasByChofer.set(String(row.chofer_id), Math.round(Number(row.bias) * 10) / 10);
+          }
+        }
+      } catch (err) {
+        if (err?.code !== '42703') throw err;
+      }
     }
   } else if (!isPg && bucket && cliSet.length) {
     const { data: rows } = await clientOrSb

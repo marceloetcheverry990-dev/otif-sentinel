@@ -11,21 +11,208 @@ export const POLLING_EVENTOS_SCRIPT = `
         // Reintento de guías Res. 154 (badge "Guía ERR" en panel de flota)
         window.retryGuiaTrip = async function(tripId) {
           if (!tripId) return;
-          if (!confirm('¿Reintentar emisión de guías para el viaje ' + tripId + '?')) return;
+          var live = CONFIG && CONFIG.dte_live === true;
+          var msg = live
+            ? ('¿Reintentar emisión de guías para ' + tripId + '?\\nEsto puede llamar al proveedor DTE real.')
+            : ('¿Simular reintento de guías para ' + tripId + '?\\nNo se envía nada al SII (emisor STUB / dry-run).');
+          if (!confirm(msg)) return;
           try {
             var res = await fetch('/api/guias-despacho/retry', {
               method: 'POST',
               credentials: 'same-origin',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ trip_id: tripId })
+              body: JSON.stringify({ trip_id: tripId, dry_run: !live })
             });
             var data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Error al reintentar');
-            alert('Reintento: emitidas=' + (data.emitted || 0) + ' errores=' + (data.errors || 0) + ' omitidas=' + (data.skipped || 0));
+            if (data.dry_run) {
+              alert('Simulación: ' + (data.would_retry || 0) + ' guía(s) en cola. Proveedor ' + (data.proveedor || 'stub') + '. Nada enviado al SII.');
+            } else {
+              alert('Reintento: emitidas=' + (data.emitted || 0) + ' errores=' + (data.errors || 0) + ' omitidas=' + (data.skipped || 0));
+            }
             if (typeof window.actualizarViajesSilencioso === 'function') window.actualizarViajesSilencioso();
           } catch (e) {
             alert('No se pudo reintentar: ' + (e.message || e));
           }
+        };
+
+        window.verGuiaElectronica = async function(otId, tripId) {
+          if (!otId && !tripId) return;
+          var modal = document.getElementById('modalGuiaElectronica');
+          if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'modalGuiaElectronica';
+            modal.style.cssText = 'display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);align-items:center;justify-content:center;padding:1rem;overflow:auto;';
+            modal.innerHTML =
+              '<div id="guiaComprobanteSheet" style="background:#fff;color:#0f172a;border-radius:10px;max-width:640px;width:100%;padding:1.35rem 1.5rem;box-shadow:0 24px 60px rgba(0,0,0,0.45);font-family:Georgia,serif;">' +
+                '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:0.85rem;border-bottom:2px solid #0f172a;padding-bottom:0.65rem;">' +
+                  '<div>' +
+                    '<div style="font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;font-family:system-ui,sans-serif;">SII · DTE Tipo 52</div>' +
+                    '<h3 style="margin:2px 0 0;font-size:1.15rem;color:#0f172a;">Guía de Despacho Electrónica</h3>' +
+                    '<div style="font-size:0.72rem;color:#475569;font-family:system-ui,sans-serif;margin-top:2px;">Res. Ex. SII N°154/2025 · obligatoria desde 1 nov 2026</div>' +
+                  '</div>' +
+                  '<div style="display:flex;gap:6px;font-family:system-ui,sans-serif;">' +
+                    '<button type="button" id="btnImprimirGuiaModal" style="background:#0f172a;border:none;color:#fff;font-size:0.75rem;padding:6px 10px;border-radius:6px;cursor:pointer;">Imprimir</button>' +
+                    '<button type="button" id="btnCerrarGuiaModal" style="background:transparent;border:1px solid #cbd5e1;color:#334155;font-size:0.75rem;padding:6px 10px;border-radius:6px;cursor:pointer;">Cerrar</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div id="guiaModalBody" style="font-size:0.82rem;line-height:1.45;color:#1e293b;font-family:system-ui,sans-serif;">Cargando…</div>' +
+              '</div>';
+            document.body.appendChild(modal);
+            if (!document.getElementById('guiaPrintStyles')) {
+              var style = document.createElement('style');
+              style.id = 'guiaPrintStyles';
+              style.textContent = '@media print{body>*{visibility:hidden!important;}#modalGuiaElectronica,#modalGuiaElectronica *{visibility:visible!important;}#modalGuiaElectronica{position:static!important;inset:auto!important;background:#fff!important;display:block!important;padding:0!important;}#guiaComprobanteSheet{box-shadow:none!important;max-width:100%!important;}#btnImprimirGuiaModal,#btnCerrarGuiaModal{display:none!important;}}';
+              document.head.appendChild(style);
+            }
+            modal.addEventListener('click', function(e) {
+              if (e.target === modal) modal.style.display = 'none';
+            });
+            document.getElementById('btnCerrarGuiaModal').onclick = function() {
+              modal.style.display = 'none';
+            };
+            document.getElementById('btnImprimirGuiaModal').onclick = function() {
+              window.print();
+            };
+          }
+          var body = document.getElementById('guiaModalBody');
+          body.textContent = 'Cargando…';
+          modal.style.display = 'flex';
+          try {
+            var qs = otId
+              ? ('ot_id=' + encodeURIComponent(otId))
+              : ('trip_id=' + encodeURIComponent(tripId));
+            var res = await fetch('/api/guias-despacho?' + qs, { credentials: 'same-origin' });
+            var data = await res.json().catch(function() { return {}; });
+            if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+            var guias = Array.isArray(data.guias) ? data.guias : [];
+            var g = otId
+              ? (guias.find(function(x) { return String(x.ot_id) === String(otId); }) || guias[0])
+              : guias[0];
+            if (!g) {
+              body.innerHTML = '<p style="margin:0;color:#b45309;">Aún no hay guía registrada para esta parada.</p>';
+              return;
+            }
+            var c = g.comprobante || {};
+            var t = c.transporte || {};
+            var em = c.emisor || data.emisor || {};
+            var rec = c.receptor || {};
+            var det = (c.detalle && c.detalle[0]) || {};
+            var esc = function(v) {
+              return String(v == null || v === '' ? '—' : v).replace(/</g, '&lt;');
+            };
+            var money = function(v) {
+              if (v == null || v === '' || isNaN(Number(v))) return '—';
+              return '$' + Number(v).toLocaleString('es-CL');
+            };
+            var fechaFull = function(iso) {
+              if (!iso) return '—';
+              try {
+                return new Date(iso).toLocaleString('es-CL', {
+                  timeZone: 'America/Santiago',
+                  year: 'numeric', month: '2-digit', day: '2-digit',
+                  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                });
+              } catch (e) { return String(iso); }
+            };
+            var row = function(label, val) {
+              return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid #e2e8f0;">' +
+                '<span style="color:#64748b;font-weight:600;min-width:38%;">' + label + '</span>' +
+                '<span style="text-align:right;color:#0f172a;word-break:break-word;">' + esc(val) + '</span></div>';
+            };
+            var section = function(title, html) {
+              return '<div style="margin-top:0.85rem;"><div style="font-size:0.68rem;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#334155;margin-bottom:4px;">' +
+                title + '</div>' + html + '</div>';
+            };
+            var banner = c.listo_para_fiscalizacion
+              ? '<div style="background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">✓ Comprobante DTE 52 completo con folio SII — listo para fiscalización.</div>'
+              : (c.comprobante_completo
+                ? '<div style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">Comprobante Res.154 completo (tipo 52). Falta folio SII timbrado: conectar SimpleAPI/Lioren para validez ante fiscalización.</div>'
+                : '<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">Incompleto: ' +
+                  esc((c.faltantes_res154 || []).join(', ') || c.aviso_fiscalizacion || 'revisar campos') + '</div>');
+            body.innerHTML = banner +
+              section('Identificación DTE',
+                row('Tipo DTE', (c.tipo_dte || 52) + ' — ' + (c.tipo_dte_glosa || 'Guía de Despacho Electrónica')) +
+                row('Estado', c.estado || g.estado || '—') +
+                row('Folio', c.folio || (String(c.estado || g.estado || '').toUpperCase() === 'STUB' ? 'Pendiente timbraje SII (staging stub)' : '—')) +
+                row('Track ID', c.track_id || '—') +
+                row('Referencia', c.referencia_externa || '—') +
+                row('Ambiente', c.ambiente || '—') +
+                row('Proveedor', c.proveedor || g.proveedor || '—')
+              ) +
+              section('Emisor',
+                row('RUT', em.rut || '—') +
+                row('Razón social', em.razon_social || '—')
+              ) +
+              section('Receptor',
+                row('RUT', rec.rut || '—') +
+                row('Razón social', rec.razon_social || '—')
+              ) +
+              section('Transporte / traslado',
+                row('IndTraslado', (c.ind_traslado != null ? c.ind_traslado : '—') + ' — ' + (c.ind_traslado_glosa || c.tipo_traslado || '')) +
+                row('Tipo despacho', (c.tipo_despacho != null ? c.tipo_despacho : '—') + ' — ' + (c.tipo_despacho_glosa || '')) +
+                row('Patente', t.patente || '—') +
+                row('Conductor', (t.conductor_nombre || '—') + (t.conductor_rut ? (' · ' + t.conductor_rut) : '')) +
+                row('Origen', t.origen_direccion
+                  ? (String(t.origen_direccion).indexOf(',') >= 0 || !t.origen_comuna
+                    ? t.origen_direccion
+                    : (t.origen_direccion + ', ' + t.origen_comuna))
+                  : (t.origen_comuna || '—')) +
+                row('Destino', t.destino_direccion
+                  ? (String(t.destino_direccion).indexOf(',') >= 0 || !t.destino_comuna
+                    ? t.destino_direccion
+                    : (t.destino_direccion + ', ' + t.destino_comuna))
+                  : (t.destino_comuna || '—')) +
+                row('Emisión (inicio traslado)', fechaFull(c.fecha_emision || g.fecha_emision)) +
+                row('Fecha estimada entrega', fechaFull(c.fecha_estimada_entrega || g.fecha_estimada_entrega))
+              ) +
+              section('Detalle de bienes',
+                row('Ítem / OT', det.nombre || det.ot_id || g.ot_id || '—') +
+                row('Viaje', det.trip_id || g.trip_id || '—') +
+                row('Cantidad', det.cantidad != null ? (det.cantidad + ' ' + (det.unidad || 'UN')) : '—') +
+                row('Valor', money(det.precio)) +
+                row('Peso (kg)', det.peso_kg != null ? det.peso_kg : '—') +
+                row('Volumen', det.volumen != null ? det.volumen : '—')
+              ) +
+              (g.error || c.error
+                ? '<p style="margin:10px 0 0;color:#b91c1c;font-size:0.75rem;">' + esc(g.error || c.error) + '</p>'
+                : '') +
+              '<p style="margin:12px 0 0;font-size:0.68rem;color:#64748b;">Documento armado según campos mínimos Res.154 / DTE tipo 52. Use Imprimir para PDF de porte. La validez fiscal plena requiere estado EMITIDA con folio del SII.</p>';
+          } catch (e) {
+            body.innerHTML = '<p style="margin:0;color:#b91c1c;">No se pudo cargar la guía: ' +
+              String(e.message || e).replace(/</g, '&lt;') + '</p>';
+          }
+        };
+
+        // KPIs del sidebar: solo paradas abiertas (no ENTREGADO/canceladas)
+        window.actualizarKpisGlobales = function(viajes) {
+          var TERMINALES = { ENTREGADO:1, RECHAZADO:1, CANCELADO_PLANILLA:1, RETORNO_BODEGA:1 };
+          var monto = 0, riesgo = 0, abiertas = 0, atrasadas = 0;
+          var moneyFmt = function(val) { return '$' + Number(val || 0).toLocaleString('es-CL'); };
+          (viajes || []).forEach(function(v) {
+            (v.detalle_paradas || []).forEach(function(p) {
+              var est = String(p.estado_operacional || '').toUpperCase();
+              if (TERMINALES[est]) return;
+              var m = Number(p.monto_total || p.valor || 0);
+              monto += m;
+              abiertas += 1;
+              var late = p.eta && p.fecha_hora_sla &&
+                new Date(p.eta).getTime() > new Date(p.fecha_hora_sla).getTime();
+              if (late) {
+                atrasadas += 1;
+                riesgo += m * 0.10;
+              }
+            });
+          });
+          var otif = abiertas > 0
+            ? Math.max(0, Math.round(((abiertas - atrasadas) / abiertas) * 100))
+            : 100;
+          var elMonto = document.getElementById('kpiMontoCalle');
+          var elRiesgo = document.getElementById('kpiRiesgoSla');
+          var elOtif = document.getElementById('kpiOtifProyectado');
+          if (elMonto) elMonto.textContent = moneyFmt(monto);
+          if (elRiesgo) elRiesgo.textContent = moneyFmt(riesgo);
+          if (elOtif) elOtif.textContent = otif + '%';
         };
 
         // ============================================================================
@@ -145,6 +332,7 @@ export const POLLING_EVENTOS_SCRIPT = `
               // que el servidor genera en el forEach inicial. Los calculamos defensivamente.
               var etaStr      = (typeof formatHoraCL === 'function') ? formatHoraCL(p._eta_str      || p.eta)       : (p._eta_str      || '--:--');
               var horaRealStr = (typeof formatHoraCL === 'function') ? formatHoraCL(p._hora_real_str || p.hora_real) : (p._hora_real_str || '--:--');
+              var slaStr      = (typeof formatHoraCL === 'function') ? formatHoraCL(p._fecha_sla_str || p.fecha_hora_sla) : (p._fecha_sla_str || '--:--');
 
               var isLate = Boolean(p.eta && p.fecha_hora_sla && new Date(p.eta).getTime() > new Date(p.fecha_hora_sla).getTime());
               var isEntregado = p.estado_operacional === ESTADOS_ENTREGADO;
@@ -244,7 +432,7 @@ export const POLLING_EVENTOS_SCRIPT = `
                   : '--:--';
                 horaHtml = '<span style="color:' + enSitioColor + ';">&#128205; Llegó: ' + safeStr(llegadaStr) + (minutosEspera > 0 ? ' (+' + minutosEspera + 'm)' : '') + '</span>';
               } else {
-                horaHtml = '&#9203; ETA: ' + safeStr(etaStr);
+                horaHtml = '&#9203; ETA: ' + safeStr(etaStr) + ' &bull; SLA: ' + safeStr(slaStr);
               }
 
               // Badge con nivel de urgencia para EN_SITIO
@@ -252,29 +440,33 @@ export const POLLING_EVENTOS_SCRIPT = `
               var badgeStyle = isEnSitio ? 'background:' + enSitioColor + ';color:white;' : '';
               var badgeLabel = isEntregado ? 'ENTREGADO' : (isRechazado ? 'RECHAZADO' : (isEnSitio ? enSitioLabel : safeStr(p.estado_operacional || p.estado || 'PENDIENTE')));
 
-              // Badge guía Res. 154 (STUB ≠ OK — no bloquea reemisión real)
-              // Nota: este archivo es template literal; para emitir \' en el JS final usar \\'
+              // Badge guía Res. 154 — click abre detalle
               var guiaHtml = '';
               var ge = String(p.guia_estado || '').toUpperCase();
               var guiaTripAttr = safeStr(v.trip_id).replace(/'/g, '');
+              var guiaOtAttr = safeStr(p.ot_id).replace(/'/g, '');
               var guiaRetryClick = 'event.stopPropagation();window.retryGuiaTrip&&window.retryGuiaTrip(\\'' + guiaTripAttr + '\\')';
+              var guiaVerClick = 'event.stopPropagation();window.verGuiaElectronica&&window.verGuiaElectronica(\\'' + guiaOtAttr + '\\',\\'' + guiaTripAttr + '\\')';
+              var guiaBadgeStyle = 'font-size:0.55rem;margin-top:2px;cursor:pointer;';
               if (ge === 'EMITIDA') {
-                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Guía OK</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle · Folio ' + safeStr(p.guia_folio || '') + '" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'SKIPPED' && p.guia_folio && String(p.guia_folio).indexOf('STUB-') !== 0) {
-                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Guía OK</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle · Folio ' + safeStr(p.guia_folio || '') + '" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'STUB' || (ge === 'SKIPPED' && (!p.guia_folio || String(p.guia_folio).indexOf('STUB-') === 0))) {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="Stub — sin DTE real. Clic para reintentar" onclick="' + guiaRetryClick + '">Guía STUB</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle guía Res.154" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'REVIEW') {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Confirmar hora de emisión') + '" onclick="' + guiaRetryClick + '">Guía REV</div>';
+                guiaHtml = '<div class="badge b-orange" style="' + guiaBadgeStyle + '" title="' + safeStr(p.guia_error || 'Confirmar hora de emisión') + '" onclick="' + guiaRetryClick + '">Guía REV</div>';
               } else if (ge === 'ERROR') {
-                guiaHtml = '<div class="badge b-red" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Error') + '" onclick="' + guiaRetryClick + '">Guía ERR</div>';
+                guiaHtml = '<div class="badge b-red" style="' + guiaBadgeStyle + '" title="' + safeStr(p.guia_error || 'Error') + '" onclick="' + guiaRetryClick + '">Guía ERR</div>';
               } else if (ge === 'PENDING' || ge === 'EMITTING') {
                 guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;">Guía…</div>';
               }
               var hrefDoc = safeHref(p.uri);
               var docBtn = hrefDoc
-                ? '<a href="' + hrefDoc + '" target="_blank" rel="noopener noreferrer" class="btn-doc">&#128196; Ver Documento</a>'
-                : '<button disabled class="btn-doc">Documento Pendiente</button>';
+                ? '<a href="' + hrefDoc + '" target="_blank" rel="noopener noreferrer" class="btn-doc" onclick="event.stopPropagation();">&#128196; Ver Documento</a>'
+                : (ge
+                  ? '<button type="button" class="btn-doc" style="cursor:pointer;" onclick="' + guiaVerClick + '">&#128196; Ver guía</button>'
+                  : '<button disabled class="btn-doc">Documento Pendiente</button>');
               var hrefFoto = safeHref(p.evidencia_url);
               var hrefFirma = safeHref(p.firma_url);
               var podLinks = '';
@@ -354,6 +546,15 @@ export const POLLING_EVENTOS_SCRIPT = `
                     ' &bull; &#128205; ' + Number(v.km_recorridos || 0).toFixed(1) + ' km' +
                     ' &bull; <b>' + money(v.valor_total_viaje) + '</b>' +
                     ' &bull; Costo Op: <span style="color:var(--danger);">' + money(costoOp) + '</span>' +
+                    (function() {
+                      var tieneGuia = (v.detalle_paradas || []).some(function(p) {
+                        var ge = String(p.guia_estado || '').toUpperCase();
+                        return ge === 'EMITIDA' || ge === 'STUB' || ge === 'SKIPPED' || ge === 'REVIEW' || ge === 'ERROR' || ge === 'PENDING' || ge === 'EMITTING';
+                      });
+                      return tieneGuia
+                        ? ' <span style="color:#34d399;font-weight:700;">&bull; clic para ver gu&#237;as</span>'
+                        : '';
+                    })() +
                   '</div>' +
                 '</div>' +
                 badgeSlaHtml +
@@ -399,6 +600,7 @@ export const POLLING_EVENTOS_SCRIPT = `
           searchTerm: ''
         }, {
           set(target, property, value) {
+            if (target[property] === value) return true;
             target[property] = value;
             actualizarUI(property, value);
             return true;
@@ -408,6 +610,14 @@ export const POLLING_EVENTOS_SCRIPT = `
         // ============================================================================
         // LÓGICA DE UI REACTIVA
         // ============================================================================
+        function markTripCardActive(safeTripId) {
+          document.querySelectorAll('.trip-card').forEach(function(card) {
+            var isActive = card.dataset.safeTrip === safeTripId;
+            card.classList.toggle('active', isActive);
+            card.setAttribute('aria-expanded', isActive);
+          });
+        }
+
         function actualizarUI(propiedad, valor) {
           if (propiedad === 'activeTab') {
             document.querySelectorAll('.tab-btn').forEach(t => {
@@ -425,16 +635,11 @@ export const POLLING_EVENTOS_SCRIPT = `
           }
 
           if (propiedad === 'activeTripId') {
-            document.querySelectorAll('.trip-card').forEach(card => {
-              const isActive = card.dataset.safeTrip === valor;
-              card.classList.toggle('active', isActive);
-              card.setAttribute('aria-expanded', isActive);
-              
-              if (isActive) {
-                 const select = document.getElementById('select-' + valor);
-                 if (select) setTimeout(() => select.focus(), 50);
-              }
-            });
+            markTripCardActive(valor);
+            if (valor) {
+              var selectEl = document.getElementById('select-' + valor);
+              if (selectEl) setTimeout(function() { selectEl.focus(); }, 50);
+            }
             dibujarRutaEnMapa(valor);
             if (typeof syncBacklogLayerVisibility === 'function') syncBacklogLayerVisibility();
             if (typeof rastrearFlotaEnVivo === 'function') rastrearFlotaEnVivo();
@@ -508,7 +713,11 @@ export const POLLING_EVENTOS_SCRIPT = `
         var banner = document.getElementById('leadRescueBanner');
         if (!banner) return;
         var list = Array.isArray(alerts) ? alerts.filter(function(a) {
-          return a && (a.status === 'OPEN' || a.status === 'ACKED' || a.status === 'RESCUING');
+          if (!a) return false;
+          if (!(a.status === 'OPEN' || a.status === 'ACKED' || a.status === 'RESCUING')) return false;
+          var mins = Number(a.stuck_minutes);
+          if (a.status !== 'RESCUING' && isFinite(mins) && mins >= 720) return false;
+          return true;
         }) : [];
         if (!list.length) {
           banner.hidden = true;
@@ -525,15 +734,25 @@ export const POLLING_EVENTOS_SCRIPT = `
         }
         var label = top.alert_type === 'SIGNAL_LOST' ? 'Señal GPS perdida' : 'Camión detenido';
         var chofer = payload.chofer || '—';
-        var mins = top.stuck_minutes != null ? top.stuck_minutes : '?';
+        var minsRaw = Number(top.stuck_minutes);
+        var minsLabel = (function(m) {
+          if (!isFinite(m) || m < 0) return '—';
+          if (m < 60) return Math.floor(m) + ' min';
+          if (m < 1440) return Math.floor(m / 60) + ' h';
+          var d = Math.floor(m / 1440);
+          var h = Math.floor((m % 1440) / 60);
+          return h ? d + ' d ' + h + ' h' : d + ' d';
+        })(minsRaw);
+        var abandoned = isFinite(minsRaw) && minsRaw >= 720;
         var more = list.length > 1 ? (' (+' + (list.length - 1) + ' más)') : '';
         var esc = function(s) {
           return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         };
         banner.innerHTML =
           '<div>' +
-            (isRed ? '🔴' : '🟡') + ' <strong>' + esc(label) + '</strong> · Viaje <code>' +
-            esc(top.trip_id) + '</code> · ' + esc(chofer) + ' · ' + esc(mins) + ' min' + more +
+            (abandoned ? '⚪' : (isRed ? '🔴' : '🟡')) + ' <strong>' +
+            esc(abandoned ? 'Viaje abandonado (GPS viejo)' : label) + '</strong> · Viaje <code>' +
+            esc(top.trip_id) + '</code> · ' + esc(chofer) + ' · ' + esc(minsLabel) + more +
           '</div>' +
           '<div class="lead-rescue-banner-actions">' +
             (top.status === 'RESCUING'
@@ -657,10 +876,13 @@ export const POLLING_EVENTOS_SCRIPT = `
       };
 
       // Global: Ruta Rápida y otros scripts reinician el poll al cerrar modales
+      let viajesRefreshInflight = null;
       const actualizarViajesSilencioso = async () => {
         // Regla §5: Polling condicionado — pausar si la pestaña no está activa
         if (document.hidden) return;
+        if (viajesRefreshInflight) return viajesRefreshInflight;
 
+        viajesRefreshInflight = (async () => {
         try {
           // Regla §3: Lectura defensiva del tenant — nunca lanza ReferenceError
           const tId = (typeof window !== 'undefined' && window._TENANT_ID)
@@ -686,13 +908,23 @@ export const POLLING_EVENTOS_SCRIPT = `
           }
           const data = await res.json();
 
-          if (!data.exito) return;
+          if (!data.exito) {
+            var syncNoOk = document.getElementById('syncStatus');
+            if (syncNoOk && syncNoOk.textContent.indexOf('En línea') === -1) {
+              syncNoOk.textContent = '🟡 Flota incompleta';
+              syncNoOk.style.color = '#fcd34d';
+            }
+            return;
+          }
 
           // Actualizar estado en memoria PRIMERO, luego re-renderizar
           window.viajesActivos = data.viajes;
           window._fleetAlerts = Array.isArray(data.fleet_alerts) ? data.fleet_alerts : [];
           if (typeof window.renderLeadRescueBanner === 'function') {
             window.renderLeadRescueBanner(window._fleetAlerts);
+          }
+          if (typeof window.actualizarKpisGlobales === 'function') {
+            window.actualizarKpisGlobales(data.viajes || []);
           }
 
           var syncStatusEl = document.getElementById('syncStatus');
@@ -787,20 +1019,29 @@ export const POLLING_EVENTOS_SCRIPT = `
               }
             });
 
-            // Actualizar panel backlog si no está activo (para no interrumpir al operador)
+            // Siempre refrescar el HTML del backlog (antes solo si NO estaba activo → lista stale tras Ruta Rápida)
             var panelBacklog = document.getElementById('panel-backlog');
-            if (panelBacklog && !panelBacklog.classList.contains('active')) {
-              var backlogHtml = data.ordenes_pendientes.length === 0
+            if (panelBacklog) {
+              var pendientesSorted = (data.ordenes_pendientes || []).slice().sort(function(a, b) {
+                return String(a.ot_id || '').localeCompare(String(b.ot_id || ''), 'es', { numeric: true });
+              });
+              var backlogHtml = pendientesSorted.length === 0
                 ? '<div style="text-align:center;color:var(--text-muted);padding:2rem;font-size:0.85rem;">Sin órdenes pendientes de ruteo.</div>'
-                : data.ordenes_pendientes.map(function(o) {
+                : pendientesSorted.map(function(o) {
                     var metaB = {};
                     try { metaB = o.metadata ? (typeof o.metadata === 'string' ? JSON.parse(o.metadata) : o.metadata) : {}; } catch(e) {}
                     var tagsB = (metaB.routing && metaB.routing.tags_viaje_exigidos) || [];
                     var money = function(v) { return '$' + Number(v || 0).toLocaleString('es-CL'); };
+                    var montoNum = Number(o.monto_total != null ? o.monto_total : o.valor_oc_clp);
+                    var montoTxt = Number.isFinite(montoNum) && montoNum > 0 ? money(montoNum) : '—';
                     var escB = function(s) {
                       return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
                     };
-                    return '<div class="backlog-item">' +
+                    var latNum = Number(o.lat);
+                    var lngNum = Number(o.lng);
+                    var hasCoords = !isNaN(latNum) && !isNaN(lngNum) && o.lat != null && o.lng != null;
+                    return '<div class="backlog-item' + (hasCoords ? ' has-coords' : '') + '"' +
+                      (hasCoords ? ' data-lat="' + latNum + '" data-lng="' + lngNum + '" role="button" tabindex="0"' : '') + '>' +
                       '<div style="display:flex;justify-content:space-between;">' +
                         '<div>' +
                           '<div style="font-weight:700;font-size:0.9rem;display:flex;align-items:center;flex-wrap:wrap;gap:4px;">' +
@@ -809,7 +1050,7 @@ export const POLLING_EVENTOS_SCRIPT = `
                           '</div>' +
                           '<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px;">' + escB(o.ot_id) + '</div>' +
                         '</div>' +
-                        '<div style="color:var(--success);font-weight:800;">' + money(o.monto_total || o.valor_oc_clp) + '</div>' +
+                        '<div style="color:var(--success);font-weight:800;">' + montoTxt + '</div>' +
                       '</div>' +
                     '</div>';
                   }).join('');
@@ -832,6 +1073,9 @@ export const POLLING_EVENTOS_SCRIPT = `
           }
 
           // Actualizar contenido del panel de flota
+          if (typeof requestAnimationFrame === 'function') {
+            await new Promise(function(r) { requestAnimationFrame(r); });
+          }
           const container = document.getElementById('panel-flota');
           const viajeActivoAntes = appState.activeTripId;
 
@@ -852,9 +1096,9 @@ export const POLLING_EVENTOS_SCRIPT = `
             });
           }
 
-          // Restaurar el viaje activo si la card sigue existiendo tras el re-render
+          // Restaurar highlight de la card sin re-disparar dibujarRutaEnMapa
           if (viajeActivoAntes && document.getElementById('card-' + viajeActivoAntes)) {
-            appState.activeTripId = viajeActivoAntes;
+            markTripCardActive(viajeActivoAntes);
           }
           // T5: reaplicar filtro de búsqueda tras el re-render (puede ocultar el activo)
           if (appState.searchTerm) {
@@ -868,7 +1112,11 @@ export const POLLING_EVENTOS_SCRIPT = `
             syncFail.textContent = '🔴 Error al sincronizar flota';
             syncFail.style.color = '#fca5a5';
           }
+        } finally {
+          viajesRefreshInflight = null;
         }
+        })();
+        return viajesRefreshInflight;
       };
 
             if (window.viajesRefreshTimer) {
@@ -894,6 +1142,20 @@ export const POLLING_EVENTOS_SCRIPT = `
             document.querySelectorAll('.tab-btn').forEach(tab => {
                 tab.addEventListener('click', (e) => appState.activeTab = e.target.dataset.target);
             });
+
+            var panelBacklogEl = document.getElementById('panel-backlog');
+            if (panelBacklogEl && !panelBacklogEl.dataset.panBound) {
+              panelBacklogEl.dataset.panBound = '1';
+              panelBacklogEl.addEventListener('click', function(e) {
+                var item = e.target.closest('.backlog-item');
+                if (!item) return;
+                var lat = Number(item.getAttribute('data-lat'));
+                var lng = Number(item.getAttribute('data-lng'));
+                if (Number.isFinite(lat) && Number.isFinite(lng) && typeof map !== 'undefined' && map) {
+                  map.setView([lat, lng], 15);
+                }
+              });
+            }
 
             const searchInput = document.getElementById('tripSearch');
             if(searchInput) {
@@ -1183,23 +1445,37 @@ export const POLLING_EVENTOS_SCRIPT = `
                 const data = await res.json();
                 if (res.ok && data.exito) { 
                     alert(data.msg || "Cruce y Sincronización exitosa"); 
-                    if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso(); 
+                    if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                    if (typeof actualizarViajesSilencioso === 'function') await actualizarViajesSilencioso(); 
                 } else { throw new Error(data.error || "Falla en la sincronización cruzada."); }
               } catch (err) { alert("Error: " + err.message); } 
               finally { btn.disabled = false; btn.textContent = originalText; }
             });
 
             document.getElementById('btnOptimize').addEventListener('click', async (e) => {
+              const camionesEl = document.getElementById('camionesDisponibles');
+              const nCamiones = parseInt(camionesEl && camionesEl.value, 10);
+              if (!Number.isInteger(nCamiones) || nCamiones < 1 || nCamiones > 50) {
+                alert('El número de camiones debe ser un entero entre 1 y 50.');
+                if (camionesEl) { camionesEl.value = '3'; camionesEl.focus(); }
+                return;
+              }
               const esHoy = CONFIG.last_sync_date && new Date(CONFIG.last_sync_date).toDateString() === new Date().toDateString();
               if (!esHoy && !confirm("⚠️ La base de datos NO se ha sincronizado hoy. ¿Rutear de todas formas?")) return;
               if (esHoy && !confirm("¿Iniciar motor de ruteo con la flota seleccionada?")) return;
               
               const btn = e.target;
               const originalText = btn.textContent;
-              btn.disabled = true; btn.textContent = '⏳ Optimizando...'; 
+              const busy = document.getElementById('towerBusy');
+              const busyOriginal = busy ? busy.textContent : '';
+              btn.disabled = true; btn.textContent = '⏳ Optimizando...';
+              if (busy) busy.hidden = false;
               
               try {
-                // [NUEVO: CAPTURA DEL SELECTOR DE CLIMA EN EL JSON BODY]
+                if (typeof actualizarViajesSilencioso === 'function') {
+                  if (busy) busy.textContent = 'Refrescando backlog antes de rutear…';
+                  await actualizarViajesSilencioso();
+                }
                 const res = await fetch('/api/optimizar-rutas', { 
                   method: 'POST',
                   credentials: 'same-origin',
@@ -1207,7 +1483,7 @@ export const POLLING_EVENTOS_SCRIPT = `
                   body: JSON.stringify({ 
                     tenant_id: window._TENANT_ID || 'empresa_base',
                     perfil_id: document.getElementById('perfilRuteo').value, 
-                    flota_disponible: document.getElementById('camionesDisponibles').value,
+                    flota_disponible: nCamiones,
                     clima: document.getElementById('climaRuteo').value,
                     depot_id: (document.getElementById('depotRuteo') || {}).value || null,
                     is_simulacion: false 
@@ -1215,13 +1491,202 @@ export const POLLING_EVENTOS_SCRIPT = `
                 });
                 const data = await res.json();
                 
-                if (res.ok && (data.exito || data.viajes_creados > 0)) {
-                  alert(data.viajes_creados + " viajes armados exitosamente.");
-                  if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso();
+                if (res.ok && Number(data.viajes_creados || 0) > 0) {
+                  var syncOk = document.getElementById('syncStatus');
+                  if (syncOk) {
+                    syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados';
+                    syncOk.style.color = '#86efac';
+                  }
+                  if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                  if (busy) busy.textContent = 'Aplicando rutas… el mapa sigue activo.';
+                  if (typeof actualizarViajesSilencioso === 'function') await actualizarViajesSilencioso();
+                  var firstNewId = Array.isArray(data.trip_ids) && data.trip_ids[0]
+                    ? 'trip_' + Array.from(String(data.trip_ids[0])).map(function(c) {
+                        return c.charCodeAt(0).toString(16).padStart(2, '0');
+                      }).join('')
+                    : null;
+                  var firstCard = document.querySelector('#panel-flota .trip-card');
+                  var pick = firstNewId || (firstCard && firstCard.dataset.safeTrip);
+                  if (pick) {
+                    var sameTrip = appState.activeTripId === pick;
+                    appState.activeTripId = pick;
+                    if (sameTrip && typeof dibujarRutaEnMapa === 'function') dibujarRutaEnMapa(pick);
+                  }
+                  await new Promise(function(r) {
+                    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() { requestAnimationFrame(r); });
+                    else setTimeout(r, 0);
+                  });
+                } else if (res.ok && data.exito) {
+                  if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                  if (typeof actualizarViajesSilencioso === 'function') await actualizarViajesSilencioso();
+                  throw new Error(
+                    data.msg === 'NO_PENDING_ORDERS'
+                      ? 'No hay pedidos pendientes de ruteo en backlog.'
+                      : (data.msg || 'El ruteador terminó sin crear viajes.')
+                  );
                 } else { throw new Error(data.msg || data.error); }
-              } catch (err) { alert("Error: " + err.message); } 
-              finally { btn.disabled = false; btn.textContent = originalText; }
+              } catch (err) { alert(err.message || 'No se pudo rutear'); } 
+              finally {
+                btn.disabled = false; btn.textContent = originalText;
+                if (busy) {
+                  busy.hidden = true;
+                  if (busyOriginal) busy.textContent = busyOriginal;
+                }
+              }
             });
+
+            function tripSinSalirRecalc(v) {
+              var stops = (v && v.detalle_paradas) || [];
+              if (!stops.length) return false;
+              return stops.every(function(p) {
+                var st = String(p.estado_operacional || p.estado || '').toUpperCase();
+                return st === 'CAMION_ASIGNADO' || st === 'PENDIENTE' || st === 'PENDIENTE_RUTEO' || st === 'PENDIENTE_CARGA';
+              });
+            }
+
+            window.cerrarModalRecalcularRuteo = function() {
+              var modal = document.getElementById('modalRecalcularRuteo');
+              if (modal) modal.style.display = 'none';
+            };
+
+            window.marcarTodosRecalcTrips = function(on) {
+              document.querySelectorAll('#listaRecalcTrips input[type="checkbox"][data-recalc-trip]').forEach(function(cb) {
+                cb.checked = !!on;
+              });
+            };
+
+            window.confirmarRecalcularRuteo = async function() {
+              var ids = [];
+              document.querySelectorAll('#listaRecalcTrips input[type="checkbox"][data-recalc-trip]:checked').forEach(function(cb) {
+                if (cb.value) ids.push(cb.value);
+              });
+              if (!ids.length) {
+                alert('Elegí al menos un viaje para recalcular.');
+                return;
+              }
+              var camionesEl = document.getElementById('camionesDisponibles');
+              var nCamiones = parseInt(camionesEl && camionesEl.value, 10);
+              if (!Number.isInteger(nCamiones) || nCamiones < 1 || nCamiones > 50) {
+                alert('El número de camiones debe ser un entero entre 1 y 50.');
+                if (camionesEl) { camionesEl.value = '3'; camionesEl.focus(); }
+                return;
+              }
+              var perfilEl = document.getElementById('perfilRuteo');
+              var climaEl = document.getElementById('climaRuteo');
+              var incluirBacklog = !!(document.getElementById('recalcIncluirBacklog') && document.getElementById('recalcIncluirBacklog').checked);
+              window.cerrarModalRecalcularRuteo();
+              var btn = document.getElementById('btnRecalcularRuteo');
+              var originalText = btn ? btn.textContent : '';
+              var busy = document.getElementById('towerBusy');
+              var busyOriginal = busy ? busy.textContent : '';
+              if (btn) { btn.disabled = true; btn.textContent = '⏳ Recalculando...'; }
+              if (busy) busy.hidden = false;
+              try {
+                var res = await fetch('/api/recalcular-ruteo', {
+                  method: 'POST',
+                  credentials: 'same-origin',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    trip_ids: ids,
+                    incluir_backlog: incluirBacklog,
+                    perfil_id: perfilEl && perfilEl.value,
+                    flota_disponible: nCamiones,
+                    clima: climaEl && climaEl.value,
+                    depot_id: (document.getElementById('depotRuteo') || {}).value || null
+                  })
+                });
+                var data = await res.json();
+                if (!res.ok || data.exito === false) {
+                  throw new Error(data.msg || data.error || 'No se pudo recalcular');
+                }
+                if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                if (busy) busy.textContent = 'Aplicando rutas… el mapa sigue activo.';
+                if (typeof actualizarViajesSilencioso === 'function') await actualizarViajesSilencioso();
+                alert(data.msg || 'Rutas recalculadas');
+              } catch (err) {
+                alert(err.message || 'No se pudo recalcular');
+              } finally {
+                if (btn) { btn.disabled = false; btn.textContent = originalText; }
+                if (busy) {
+                  busy.hidden = true;
+                  if (busyOriginal) busy.textContent = busyOriginal;
+                }
+              }
+            };
+
+            const btnRecalc = document.getElementById('btnRecalcularRuteo');
+            if (btnRecalc) {
+              btnRecalc.addEventListener('click', function() {
+                const camionesEl = document.getElementById('camionesDisponibles');
+                const nCamiones = parseInt(camionesEl && camionesEl.value, 10);
+                if (!Number.isInteger(nCamiones) || nCamiones < 1 || nCamiones > 50) {
+                  alert('El número de camiones debe ser un entero entre 1 y 50.');
+                  if (camionesEl) { camionesEl.value = '3'; camionesEl.focus(); }
+                  return;
+                }
+                const perfilEl = document.getElementById('perfilRuteo');
+                const climaEl = document.getElementById('climaRuteo');
+                const perfilLabel = perfilEl && perfilEl.options[perfilEl.selectedIndex]
+                  ? perfilEl.options[perfilEl.selectedIndex].text
+                  : 'perfil';
+                const climaLabel = climaEl && climaEl.options[climaEl.selectedIndex]
+                  ? climaEl.options[climaEl.selectedIndex].text
+                  : 'clima';
+                var sum = document.getElementById('recalcResumenValores');
+                if (sum) {
+                  sum.textContent = 'Perfil: ' + perfilLabel + ' · Camiones: ' + nCamiones + ' · Clima: ' + climaLabel;
+                }
+                var nBacklog = 0;
+                if (typeof ordenesData !== 'undefined' && Array.isArray(ordenesData)) {
+                  nBacklog = ordenesData.filter(function(o) {
+                    var st = String(o.estado_operacional || '').toUpperCase();
+                    return !o.trip_id && (st === 'PENDIENTE_RUTEO' || st === 'PENDIENTE' || st === 'PENDIENTE_CARGA');
+                  }).length;
+                }
+                var bl = document.getElementById('recalcIncluirBacklog');
+                var blHint = document.getElementById('recalcBacklogCount');
+                if (bl) { bl.checked = false; bl.disabled = nBacklog < 1; }
+                if (blHint) {
+                  blHint.textContent = nBacklog < 1
+                    ? 'No hay pedidos pendientes para mezclar.'
+                    : ('Hay ' + nBacklog + ' pedido(s) en backlog. Si lo marcás, se mezclan con las rutas elegidas.');
+                }
+                var lista = document.getElementById('listaRecalcTrips');
+                var vacio = document.getElementById('recalcTripsVacio');
+                var btnOk = document.getElementById('btnConfirmarRecalcular');
+                if (!lista) return;
+                lista.textContent = '';
+                var unstarted = (window.viajesActivos || []).filter(tripSinSalirRecalc);
+                if (!unstarted.length) {
+                  if (vacio) vacio.hidden = false;
+                  if (btnOk) btnOk.disabled = true;
+                } else {
+                  if (vacio) vacio.hidden = true;
+                  if (btnOk) btnOk.disabled = false;
+                  var pre = (typeof appState !== 'undefined' && appState.activeTripId) ? String(appState.activeTripId) : '';
+                  unstarted.forEach(function(v) {
+                    var id = String(v.trip_id || '');
+                    if (!id) return;
+                    var label = document.createElement('label');
+                    label.className = 'recalc-trip-item';
+                    var cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.setAttribute('data-recalc-trip', '1');
+                    cb.value = id;
+                    if (unstarted.length === 1 || (pre && pre === id)) cb.checked = true;
+                    var txt = document.createElement('span');
+                    var chofer = String(v.chofer || 'Sin chofer');
+                    var n = Number(v.total_paradas || ((v.detalle_paradas || []).length) || 0);
+                    txt.textContent = id + ' · ' + chofer + ' · ' + n + ' parada' + (n === 1 ? '' : 's');
+                    label.appendChild(cb);
+                    label.appendChild(txt);
+                    lista.appendChild(label);
+                  });
+                }
+                var modal = document.getElementById('modalRecalcularRuteo');
+                if (modal) modal.style.display = 'flex';
+              });
+            }
 
             const depotSel = document.getElementById('depotRuteo');
             if (depotSel) {
@@ -1336,11 +1801,12 @@ export const POLLING_EVENTOS_SCRIPT = `
             // El poll actualizará a "En línea" o "Error al sincronizar".
             const syncStatus = document.getElementById('syncStatus');
             if (syncStatus && syncStatus.textContent.indexOf('En línea') === -1
-                && syncStatus.textContent.indexOf('Error') === -1) {
+                && syncStatus.textContent.indexOf('Error') === -1
+                && syncStatus.textContent.indexOf('Cargando') === -1) {
                 const serverLastSync = CONFIG.last_sync_date;
-                syncStatus.textContent = serverLastSync
-                  ? '🟢 Sync ' + formatHoraCL(serverLastSync)
-                  : '🟡 Conectando…';
+                if (serverLastSync) {
+                  syncStatus.textContent = '🟢 Sync ' + formatHoraCL(serverLastSync);
+                }
             }
           }
         });

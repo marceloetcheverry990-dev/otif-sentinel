@@ -118,9 +118,19 @@ export async function emitGuiasForTrip(env, supabase, ctx) {
     }
 
     const { cliente, reason: clienteReason } = await resolveCliente(supabase, tenant_id, ot.cliente);
-    const tipo = normalizeTipoTraslado(ot.tipo_traslado || ot.tipo_movimiento);
-    const destino_direccion = cliente?.direccion_calle || null;
-    const destino_comuna = cliente?.comuna || null;
+    let metaOt = ot.metadata;
+    if (typeof metaOt === 'string') {
+      try { metaOt = JSON.parse(metaOt); } catch { metaOt = {}; }
+    }
+    metaOt = metaOt && typeof metaOt === 'object' ? metaOt : {};
+    const tipo = normalizeTipoTraslado(
+      ot.tipo_traslado || ot.tipo_movimiento || metaOt.tipo_traslado
+    );
+    const destinoFromOt = resolveDestinoFromOrden(ot);
+    const destino_direccion = cliente?.direccion_calle || destinoFromOt.direccion || null;
+    const destino_comuna = cliente?.comuna || destinoFromOt.comuna || null;
+    const cliente_rut = metaOt.cliente_rut || metaOt.rut_receptor || metaOt.rut
+      || cliente?.rut || cliente?.rut_cliente || null;
 
     const payload = {
       tenant_id,
@@ -137,13 +147,17 @@ export async function emitGuiasForTrip(env, supabase, ctx) {
       origen_lng: origen.origen_lng,
       destino_direccion,
       destino_comuna,
-      cantidad: numOrNull(ot.cantidad),
+      cantidad: numOrNull(ot.cantidad) ?? 1,
       peso_kg: numOrNull(ot.peso_kg),
       volumen: numOrNull(ot.volumen),
       valor_clp: numOrNull(ot.monto_total ?? ot.valor_oc_clp),
       fecha_emision_iso: fechaFija,
       fecha_estimada_entrega: fechaEstimada,
       cliente_nombre: ot.cliente || null,
+      cliente_rut: cliente_rut ? String(cliente_rut).trim() : null,
+      emisor_rut: dteEnv.DTE_RUT_EMISOR || null,
+      emisor_razon_social: dteEnv.DTE_RAZON_SOCIAL || null,
+      ambiente: dteEnv.DTE_AMBIENTE || 'certificacion',
       ts_source: rowTsSource,
     };
 
@@ -174,10 +188,11 @@ export async function emitGuiasForTrip(env, supabase, ctx) {
       continue;
     }
 
-    if (existing?.estado === 'ERROR' && existing?.payload_enviado && dteEnv.DTE_PROVIDER === 'simpleapi') {
+    if (existing?.estado === 'ERROR' && existing?.payload_enviado && (dteEnv.DTE_PROVIDER === 'simpleapi' || dteEnv.DTE_PROVIDER === 'lioren')) {
       try {
-        const { lookupGuiaByReferencia } = await import('./simpleapi-client.js');
-        const found = await lookupGuiaByReferencia(payload, dteEnv);
+        const found = dteEnv.DTE_PROVIDER === 'lioren'
+          ? await (await import('./lioren-client.js')).lookupGuiaByReferenciaLioren(payload, dteEnv)
+          : await (await import('./simpleapi-client.js')).lookupGuiaByReferencia(payload, dteEnv);
         if (found?.estado === 'EMITIDA' && found.folio) {
           await supabase
             .from('guias_despacho')
@@ -187,7 +202,7 @@ export async function emitGuiasForTrip(env, supabase, ctx) {
               track_id: found.track_id,
               respuesta: found.respuesta,
               error: null,
-              proveedor: 'simpleapi',
+              proveedor: found.proveedor || dteEnv.DTE_PROVIDER,
               updated_at: new Date().toISOString(),
             })
             .eq('tenant_id', tenant_id)
@@ -316,12 +331,14 @@ export async function loadOrdenesForEmit(supabase, { tenant_id, trip_id, mode })
     return { ordenes: ordered, guiasByOt, error: null };
   }
 
+  // Primera SALIDA / salida de bodega: emitir para TODAS las OTs del viaje
+  // (si filtramos ENTREGADO, la parada recién cerrada nunca recibe guía).
   const { data: ordenes, error } = await supabase
     .from('ordenes_pendientes')
     .select('ot_id, cliente, peso_kg, volumen, cantidad, valor_oc_clp, monto_total, tipo_traslado, tipo_movimiento, metadata, eta')
     .eq('tenant_id', tenant_id)
     .eq('trip_id', trip_id)
-    .not('estado_operacional', 'in', '("ENTREGADO","RECHAZADO","CANCELADO_PLANILLA")');
+    .not('estado_operacional', 'in', '("CANCELADO_PLANILLA","RECHAZADO")');
 
   return {
     ordenes: ordenes || [],
@@ -330,9 +347,33 @@ export async function loadOrdenesForEmit(supabase, { tenant_id, trip_id, mode })
   };
 }
 
+/**
+ * Destino Res.154 desde la OT (Ruta Rápida / sync) cuando no hay maestro clientes.
+ * Parsea comuna típica: "Calle 123, Comuna, Región Metropolitana, Chile".
+ */
+export function resolveDestinoFromOrden(ot) {
+  let meta = ot?.metadata;
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta); } catch { meta = {}; }
+  }
+  meta = meta && typeof meta === 'object' ? meta : {};
+  const direccion = String(meta.direccion_entrega || meta.direccion || '').trim() || null;
+  if (!direccion) return { direccion: null, comuna: null };
+
+  const parts = direccion.split(',').map((s) => s.trim()).filter(Boolean);
+  const filtered = parts.filter(
+    (p) => !/^chile$/i.test(p) && !/^regi[oó]n\b/i.test(p)
+  );
+  const comuna =
+    filtered.length >= 2 ? filtered[filtered.length - 1] : (filtered[0] || null);
+  return { direccion, comuna };
+}
+
 export function shouldSkipExisting(existing) {
   if (!existing) return false;
   if (existing.estado === 'EMITIDA') return true;
+  // Stub ya emitido en demo/staging: no reescribir en cada SALIDA de parada
+  if (existing.estado === 'STUB') return true;
   if (existing.estado === 'EMITTING') {
     const updated = existing.updated_at ? Date.parse(existing.updated_at) : 0;
     if (Number.isFinite(updated) && Date.now() - updated < EMITTING_LOCK_MS) {
@@ -355,7 +396,8 @@ async function upsertGuiaRow(supabase, existing, row) {
 }
 
 function normalizeTipoTraslado(raw) {
-  if (!raw) return null;
+  // Despacho a cliente sin tipificar = venta (IndTraslado 1) — caso típico Ruta Rápida / sync.
+  if (!raw) return 'VENTA';
   const t = String(raw).trim().toUpperCase().replace(/\s+/g, '_');
   if (TIPOS_VALIDOS.has(t)) return t;
   if (t.includes('DEVOL')) return 'DEVOLUCION';

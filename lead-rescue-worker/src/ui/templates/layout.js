@@ -29,6 +29,7 @@ export const renderLayout = ({
     <body>
 
       <div id="leadRescueBanner" class="lead-rescue-banner" hidden></div>
+      <div id="towerBusy" class="tower-busy-banner" hidden role="status">Optimizando rutas en el servidor… el mapa y el GPS siguen activos.</div>
 
       <header class="tower-header">
         <div class="tower-header-top">
@@ -77,9 +78,10 @@ export const renderLayout = ({
             </select>
             <label class="header-trucks-wrap" title="Camiones disponibles">
               <span class="header-trucks-label">N°</span>
-              <input type="number" id="camionesDisponibles" class="input-base header-trucks" value="3" min="1" max="50">
+              <input type="number" id="camionesDisponibles" class="input-base header-trucks" value="3" min="1" max="50" step="1">
             </label>
-            <button type="button" id="btnOptimize" class="btn-primary btn-compact">Rutear</button>
+            <button type="button" id="btnOptimize" class="btn-primary btn-compact" title="El ruteo se calcula en Cloudflare Workers (servidor). El navegador no corre el VRP.">Rutear</button>
+            <button type="button" id="btnRecalcularRuteo" class="btn btn-compact" title="Elegí qué rutas ya armadas (todavía no salieron) recalcular con el perfil, N° de camiones y clima.">Recalcular</button>
             <button type="button" id="btnReoptMidday" class="btn btn-compact" title="Inserta pedidos nuevos en rutas ya activas sin romper entregas en curso">Re-opt</button>
             <button type="button" onclick="abrirRutaRapida()" class="btn btn-ruta-rapida" title="Crear ruta espontánea SPOT-">Ruta Rápida</button>
           </div>
@@ -91,15 +93,15 @@ export const renderLayout = ({
           <div class="global-kpis">
             <div class="kpi-box" style="border-top-color: var(--primary);">
               <div class="kpi-title">Monto en Calle</div>
-              <div class="kpi-val" style="color: var(--primary);">${money(totalDineroEnCalle)}</div>
+              <div class="kpi-val" id="kpiMontoCalle" style="color: var(--primary);">${money(totalDineroEnCalle)}</div>
             </div>
             <div class="kpi-box" style="border-top-color: var(--danger);">
-              <div class="kpi-title">Riesgo Multas</div>
-              <div class="kpi-val" style="color: var(--danger);">${money(totalDineroRiesgo)}</div>
+              <div class="kpi-title" title="10% del monto de paradas abiertas cuyo ETA ya supera el SLA. No es multa histórica.">Riesgo SLA abierto</div>
+              <div class="kpi-val" id="kpiRiesgoSla" style="color: var(--danger);">${money(totalDineroRiesgo)}</div>
             </div>
             <div class="kpi-box" style="border-top-color: var(--success);">
-              <div class="kpi-title">OTIF Global</div>
-              <div class="kpi-val" style="color: var(--success);">${otifProyectado}%</div>
+              <div class="kpi-title" title="Paradas en viaje sin quiebre de SLA / total de paradas abiertas. El OTIF cerrado está en Dashboards.">OTIF proyectado</div>
+              <div class="kpi-val" id="kpiOtifProyectado" style="color: var(--success);">${otifProyectado}%</div>
             </div>
           </div>
 
@@ -163,7 +165,15 @@ export const renderLayout = ({
                         </div>
                       </div>
                       <div class="trip-subtitle" style="margin-top: 4px;">
-                        ${v.entregas_completadas}/${v.total_paradas} Stops • 📍 ${Number(v.km_recorridos || 0).toFixed(1)} km • <b>${money(v.valor_total_viaje)}</b> • Costo Op: <span style="color:var(--danger);">${money(costoOp)}</span>
+                        ${v.entregas_completadas}/${v.total_paradas} Stops • 📍 ${Number(v.km_recorridos || 0).toFixed(1)} km • <b>${money(v.valor_total_viaje)}</b> • Costo Op: <span style="color:var(--danger);">${money(costoOp)}</span>${(() => {
+                          const tieneGuia = (v.detalle_paradas || []).some((p) => {
+                            const ge = String(p.guia_estado || '').toUpperCase();
+                            return ['EMITIDA', 'STUB', 'SKIPPED', 'REVIEW', 'ERROR', 'PENDING', 'EMITTING'].includes(ge);
+                          });
+                          return tieneGuia
+                            ? ' <span style="color:#34d399;font-weight:700;">• clic para ver guías</span>'
+                            : '';
+                        })()}
                       </div>
                     </div>
                     ${badgeSla}
@@ -261,7 +271,7 @@ export const renderLayout = ({
                                   const statusColor = isEntregado ? 'var(--success)' : 'var(--danger)';
                                   return `<span style="color: ${statusColor};">${statusIcon} Real: ${p._hora_real_str}</span>${comparativaHtml}`;
                                 } else {
-                                  return `⏳ ETA: ${p._eta_str}`;
+                                  return `⏳ ETA: ${p._eta_str} · SLA: ${p._fecha_sla_str || '--:--'}`;
                                 }
                               })()}
                             </div>
@@ -279,8 +289,13 @@ export const renderLayout = ({
               ${ordenesPendientes.map(o => {
                 const metaBacklog = safeParseJSON(o.metadata);
                 const tagsBacklog = metaBacklog?.routing?.tags_viaje_exigidos || [];
+                const montoNum = Number(o.monto_total != null ? o.monto_total : o.valor_oc_clp);
+                const montoTxt = Number.isFinite(montoNum) && montoNum > 0 ? money(montoNum) : '—';
+                const latNum = Number(o.lat);
+                const lngNum = Number(o.lng);
+                const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
                 return `
-                <div class="backlog-item">
+                <div class="backlog-item${hasCoords ? ' has-coords' : ''}" data-lat="${hasCoords ? latNum : ''}" data-lng="${hasCoords ? lngNum : ''}" ${hasCoords ? 'role="button" tabindex="0"' : ''}>
                   <div style="display:flex; justify-content:space-between;">
                     <div>
                       <div style="font-weight:700; font-size:0.9rem; display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
@@ -289,7 +304,7 @@ export const renderLayout = ({
                       </div>
                       <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">${escapeHTML(o.ot_id)}</div>
                     </div>
-                    <div style="color:var(--success); font-weight:800;">${money(o.monto_total || o.valor_oc_clp)}</div>
+                    <div style="color:var(--success); font-weight:800;">${montoTxt}</div>
                   </div>
                 </div>
                 `;

@@ -11,8 +11,11 @@ import { resolveDepot, depotToSolver } from '../helpers/depots.js';
 import { enrichOrdersWithSlaRisk } from '../helpers/sla-risk.js';
 import { getEffectiveSpeedKmh, applyClimaToSpeed } from '../helpers/speed-calibration.js';
 import { computeScanToken } from '../helpers/scan-token.js';
+import { parseFlotaDisponible } from '../helpers/optimizer-flota.js';
+import { resolvePerfilPesos } from '../helpers/perfil-pesos.js';
+import { fetchMapboxDrivingRoute } from '../helpers/mapbox-directions.js';
 
-async function tryOptimizerLock(env, tenantId) {
+export async function tryOptimizerLock(env, tenantId) {
   return withDb(env, async (client) => {
     const key = `optimizer_lock_${tenantId}`;
     const res = await client.query(
@@ -33,7 +36,7 @@ async function tryOptimizerLock(env, tenantId) {
   });
 }
 
-async function releaseOptimizerLock(env, tenantId) {
+export async function releaseOptimizerLock(env, tenantId) {
   return withDb(env, async (client) => {
     await client.query(
       `UPDATE system_flags SET value = 'CLOSED', expires_at = NULL WHERE key = $1`,
@@ -108,28 +111,12 @@ function obtenerInicioOperacionMs() {
 }
 
 async function resolverViajeTrafico(cluster, env, depot = DEFAULT_DEPOT) {
-  try {
-    const MAPBOX_TOKEN = env.MAPBOX_TOKEN || CONFIG.MAPBOX_TOKEN;
-    if (!MAPBOX_TOKEN) throw new Error("Missing Mapbox Token");
-
-    const coords = [{ lat: depot.lat, lng: depot.lng }, ...cluster];
-    if (coords.length > 25) return null; 
-
-    const coordsString = coords.map(c => `${c.lng},${c.lat}`).join(';');
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coordsString}?geometries=geojson&steps=false&access_token=${MAPBOX_TOKEN}`;
-    
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 6000); 
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(id); 
-    
-    if (!res.ok) throw new Error(`Mapbox HTTP Error: ${res.status}`);
-    const data = await res.json();
-    if (data.code !== 'Ok' || !data.routes || data.routes.length === 0) return null;
-    return { route: data.routes[0] };
-  } catch (e) {
-    return null; 
-  }
+  const coords = [{ lat: depot.lat, lng: depot.lng }, ...cluster];
+  const route = await fetchMapboxDrivingRoute(env, coords, {
+    timeoutMs: 6000,
+    overview: 'false',
+  });
+  return route ? { route } : null;
 }
 
 // ============================================================================
@@ -154,14 +141,13 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
     const climaSeleccionado = body.clima || 'NORMAL';
     // Identificador único de esta corrida del optimizer — se propaga a todas las órdenes
     const optimizationRunId = `OPT-${crypto.randomUUID()}`;
-    // M-18: 0 debe congelar salidas; solo null/undefined/NaN → sin límite
-    const flotaRaw = body.flota_disponible;
-    const flotaParsed = flotaRaw === null || flotaRaw === undefined || flotaRaw === ''
-      ? NaN
-      : parseInt(flotaRaw, 10);
-    const flotaDisponible = Number.isFinite(flotaParsed)
-      ? Math.max(0, flotaParsed)
-      : 99;
+    const flotaCheck = parseFlotaDisponible(body.flota_disponible);
+    if (!flotaCheck.ok) {
+      return new Response(JSON.stringify({
+        exito: false, error: 'FLOTA_INVALIDA', msg: flotaCheck.error,
+      }), { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } });
+    }
+    const flotaDisponible = flotaCheck.value;
     if (flotaDisponible === 0) {
       return new Response(JSON.stringify({
         exito: true, msg: 'FLOTA_CONGELADA', viajes_creados: 0,
@@ -367,13 +353,36 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
 
     if (errChoferes) throw errChoferes;
     console.log('[OPTIMIZER] Choferes disponibles:', choferesRows?.length || 0, '| Límite:', flotaDisponible);
-    if (!choferesRows || choferesRows.length === 0) throw new Error("NO_AVAILABLE_DRIVERS");
+    if (!choferesRows || choferesRows.length === 0) {
+      let ocupados = 0;
+      try {
+        const occ = await supabase
+          .from('choferes')
+          .select('chofer_id', { count: 'exact', head: true })
+          .eq('tenant_id', tenant_id)
+          .neq('estado', 'DISPONIBLE');
+        ocupados = Number(occ.count) || 0;
+      } catch (_) { /* ignore */ }
+      const msg = ocupados > 0
+        ? `No hay choferes libres: ${ocupados} ya están en un viaje. Rutear arma rutas nuevas; no reordena el viaje activo. Para meter el backlog en rutas existentes usá Re-opt.`
+        : 'No hay choferes en estado DISPONIBLE. Asigná o liberá un chofer e intentá de nuevo.';
+      return new Response(JSON.stringify({
+        exito: false,
+        error: 'NO_AVAILABLE_DRIVERS',
+        msg,
+        choferes_ocupados: ocupados,
+        ordenes_pendientes: ordenes.length,
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
 
     // 4b. CARGAR PERFIL DE OPTIMIZACIÓN
     // Los pesos del perfil afectan el puntaje de scoring en el VRP.
     // peso_distancia: importancia de minimizar km | peso_sla: importancia de cumplir horario
     // peso_valor_carga: priorizar órdenes de mayor valor | peso_riesgo_ia: penalizar órdenes con riesgo
-    let perfilPesos = { peso_distancia: 1.0, peso_sla: 1.0, peso_valor_carga: 0.0, peso_riesgo_ia: 0.0 };
+    let perfilPesos = resolvePerfilPesos(null);
     if (perfilId) {
       // M-13: tras mig 011 filtra tenant; filas legacy (tenant_id NULL) siguen válidas
       let perfilData = null;
@@ -385,7 +394,6 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
         .or(`tenant_id.eq.${tenant_id},tenant_id.is.null`)
         .maybeSingle());
       if (errPerfil && /tenant_id/.test(String(errPerfil.message || ''))) {
-        // Columna aún no migrada
         ({ data: perfilData, error: errPerfil } = await supabase
           .from('perfiles_optimizacion')
           .select('peso_distancia, peso_sla, peso_valor_carga, peso_riesgo_ia, nombre_perfil')
@@ -394,20 +402,11 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
       }
       if (errPerfil) console.warn('[OPTIMIZER] Perfil error:', errPerfil.message);
       if (perfilData) {
-        perfilPesos = {
-          peso_distancia: Number(perfilData.peso_distancia) || 1.0,
-          peso_sla:       Number(perfilData.peso_sla)       || 1.0,
-          peso_valor_carga: Number(perfilData.peso_valor_carga) || 0.0,
-          peso_riesgo_ia: Number(perfilData.peso_riesgo_ia) || 0.0,
-        };
-        console.log('[OPTIMIZER] Perfil cargado:', perfilData.nombre_perfil, perfilPesos);
+        perfilPesos = resolvePerfilPesos(perfilData);
+        console.log('[OPTIMIZER] Perfil cargado:', perfilPesos.nombre_perfil, perfilPesos);
       } else {
         console.warn('[OPTIMIZER] Perfil no encontrado; usando defaults');
       }
-    }
-    // Si hay riesgo empírico/IA, activar soft reorder aunque el perfil tenga peso 0
-    if (ordenes.some((o) => Number(o.riesgo_score) >= 50)) {
-      perfilPesos.peso_riesgo_ia = Math.max(Number(perfilPesos.peso_riesgo_ia) || 0, 0.8);
     }
 
     let choferes = choferesRows.map(c => {
@@ -501,7 +500,12 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
       });
     }
 
-    viajesEstructurados.sort((a, b) => b.distanciaKm - a.distanciaKm);
+    viajesEstructurados.sort((a, b) => {
+      const aTagged = Array.isArray(a.tagsRequeridos) && a.tagsRequeridos.length > 0 ? 1 : 0;
+      const bTagged = Array.isArray(b.tagsRequeridos) && b.tagsRequeridos.length > 0 ? 1 : 0;
+      if (aTagged !== bTagged) return bTagged - aTagged;
+      return b.distanciaKm - a.distanciaKm;
+    });
     const asignacionesFinales = [];
     const sinAsignarIds = [];
     const cryptoApi = globalThis.crypto;
@@ -528,7 +532,10 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
         const pesoRestante = Number(ch.capacidad_peso || 99999) - Number(ch.peso_asignado || 0);
         if (pesoViaje > pesoRestante + 1e-6) continue;
 
-        const costo = viaje.distanciaKm - (FACTOR_EQUIDAD * (promedioFlotaKm - ch.km_acumulados));
+        const routeNeedsTags = Array.isArray(viaje.tagsRequeridos) && viaje.tagsRequeridos.length > 0;
+        const choferHasSpecialTags = Array.isArray(ch.tags) && ch.tags.length > 0;
+        const reservaEspecialPenalty = !routeNeedsTags && choferHasSpecialTags ? 10000 : 0;
+        const costo = viaje.distanciaKm - (FACTOR_EQUIDAD * (promedioFlotaKm - ch.km_acumulados)) + reservaEspecialPenalty;
         if (costo < menorCosto) { menorCosto = costo; mejorChoferIdx = i; }
       }
 
@@ -656,7 +663,7 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
           dbUpdatePromises.push(
             supabase
               .from('flota_vehiculos')
-              .update({ trip_id_actual: asignacion.tripId, estado: 'EN_RUTA' })
+              .update({ trip_id_actual: asignacion.tripId, estado: 'CAMION_ASIGNADO' })
               .eq('tenant_id', tenant_id)
               .eq('patente', asignacion.patente)
           );
@@ -685,6 +692,7 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
     return new Response(JSON.stringify({ 
       exito: ok,
       viajes_creados: asignacionesFinales.length,
+      trip_ids: asignacionesFinales.map((a) => a.tripId),
       sin_asignar_ids: sinAsignarIds,
       db_failures: dbFailures,
       simulacion: isSimulacion,

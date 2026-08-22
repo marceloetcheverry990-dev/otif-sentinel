@@ -1,13 +1,30 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import type {} from 'zustand/middleware';
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { API_BASE_URL as API_URL } from '../config/api';
 
-const secureStorage = {
-  getItem: async (name: string): Promise<string | null> => await SecureStore.getItemAsync(name),
-  setItem: async (name: string, value: string): Promise<void> => await SecureStore.setItemAsync(name, value),
-  removeItem: async (name: string): Promise<void> => await SecureStore.deleteItemAsync(name),
-};
+const { persist, createJSONStorage } =
+  require('zustand/middleware.js') as typeof import('zustand/middleware');
+
+// expo-secure-store no funciona en web — usar localStorage como fallback
+const secureStorage =
+  Platform.OS === 'web'
+    ? {
+        getItem: async (name: string): Promise<string | null> =>
+          typeof localStorage !== 'undefined' ? localStorage.getItem(name) : null,
+        setItem: async (name: string, value: string): Promise<void> => {
+          if (typeof localStorage !== 'undefined') localStorage.setItem(name, value);
+        },
+        removeItem: async (name: string): Promise<void> => {
+          if (typeof localStorage !== 'undefined') localStorage.removeItem(name);
+        },
+      }
+    : {
+        getItem: async (name: string): Promise<string | null> => await SecureStore.getItemAsync(name),
+        setItem: async (name: string, value: string): Promise<void> => await SecureStore.setItemAsync(name, value),
+        removeItem: async (name: string): Promise<void> => await SecureStore.deleteItemAsync(name),
+      };
 
 interface AuthState {
   token: string | null;

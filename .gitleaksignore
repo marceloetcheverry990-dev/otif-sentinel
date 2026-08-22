@@ -1,0 +1,7 @@
+# Historical false positives reviewed on 2026-07-19.
+# Keep these fingerprint-specific so new findings in the same files still fail.
+27d3a18a79c192963a29253b1b5d32b39fc011b6:.kiro/specs/autenticacion-chofer/design.md:generic-api-key:83
+17450043f970d902ffb534ef75e60208a27fd2c1:DEPLOYMENT_GUIDE.md:curl-auth-user:120
+17450043f970d902ffb534ef75e60208a27fd2c1:DEPLOYMENT_GUIDE.md:curl-auth-user:206
+17450043f970d902ffb534ef75e60208a27fd2c1:docs/troubleshooting.md:curl-auth-user:485
+17450043f970d902ffb534ef75e60208a27fd2c1:src/monitoring/errors.test.js:generic-api-key:158

@@ -54,7 +54,7 @@ Si `/health` vuelve a 503: verificar proyecto Supabase activo, password Hyperdri
 |------|--------|
 | Worker | `lead-rescue-pipeline-staging` |
 | URL | https://lead-rescue-pipeline-staging.marceloetcheverry990.workers.dev |
-| Hyperdrive | Mismo id prod (`8390e963773c4f8e82886e7da7358f70`) |
+| Hyperdrive | **Mismo id prod hasta provisionar DB staging** (`SHARED_DATASTORE=true`). Crear Postgres nuevo + `npm run provision:staging-db` y cambiar `env.staging.hyperdrive`. |
 | Colas | `leads-*-queue-staging` |
 | Tenant monitoring | `staging_test` |
 | R2 | `chat-photos` (mismo bucket; preferir prefijos/tenant de prueba) |
@@ -70,7 +70,7 @@ npx wrangler queues create leads-delivery-queue-staging
 
 ### Secrets staging
 
-Usar valores **distintos** a prod cuando sea posible (`JWT_SECRET`, `DASHBOARD_SECRET`, `MONITORING_PASSWORD`). Supabase/Hyperdrive pueden compartir el mismo proyecto Free.
+Usar valores **distintos** a prod (`JWT_SECRET`, `DASHBOARD_SECRET`, `MONITORING_PASSWORD`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`). Hyperdrive de staging debe apuntar a ese Postgres, no al de prod.
 
 ```powershell
 # Desde .dev.vars (no commitear):

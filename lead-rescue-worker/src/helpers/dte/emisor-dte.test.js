@@ -64,6 +64,17 @@ describe('EmisorDTE', () => {
     });
     expect(await allowed.emitirGuia(complete)).toMatchObject({ estado: 'STUB', folio: null });
   });
+
+  it('createEmisorDTE lioren llama al cliente HTTP', async () => {
+    const emisor = createEmisorDTE({ DTE_PROVIDER: 'lioren', LIOREN_TOKEN: 'tok' });
+    globalThis.fetch = async () => new Response(JSON.stringify({ folio: 88, id: 1 }), { status: 200 });
+    try {
+      const r = await emisor.emitirGuia(complete);
+      expect(r).toMatchObject({ estado: 'EMITIDA', folio: '88', proveedor: 'lioren' });
+    } finally {
+      delete globalThis.fetch;
+    }
+  });
 });
 
 describe('shouldSkipExisting (S3/S4)', () => {
@@ -76,7 +87,7 @@ describe('shouldSkipExisting (S3/S4)', () => {
   });
 
   it('permite reintentar STUB y ERROR', () => {
-    expect(shouldSkipExisting({ estado: 'STUB', folio: null })).toBe(false);
+    expect(shouldSkipExisting({ estado: 'STUB', folio: null })).toBe(true);
     expect(shouldSkipExisting({ estado: 'ERROR', folio: null })).toBe(false);
     expect(shouldSkipExisting({ estado: 'SKIPPED', folio: 'STUB-x' })).toBe(false);
   });

@@ -446,20 +446,24 @@ export async function renderExecutiveDashboard(request, env) {
       const toDateStr = (d) => \`\${d.getFullYear()}-\${pad(d.getMonth() + 1)}-\${pad(d.getDate())}\`;
 
       let desde = null;
-      let hasta = toDateStr(now);
+      let hasta = null;
 
       if (period === 'today') {
         desde = toDateStr(now);
+        hasta = toDateStr(now);
       } else if (period === 'week') {
         const d = new Date(now);
         d.setDate(d.getDate() - 6);
         desde = toDateStr(d);
+        hasta = toDateStr(now);
       } else if (period === 'month') {
         desde = \`\${now.getFullYear()}-\${pad(now.getMonth() + 1)}-01\`;
+        hasta = toDateStr(now);
       } else if (period === 'year') {
         desde = \`\${now.getFullYear()}-01-01\`;
+        hasta = toDateStr(now);
       }
-      // period === 'all' → desde y hasta quedan null (sin filtro de fecha)
+      // period === 'all' → sin filtro de fecha
 
       return { desde, hasta };
     }
@@ -478,7 +482,7 @@ export async function renderExecutiveDashboard(request, env) {
       if (hasta) url += \`&hasta=\${hasta}\`;
 
       try {
-        const res = await fetch(url);
+        const res = await fetch(url, { credentials: 'same-origin' });
         if (!res.ok) return null;
         return await res.json();
       } catch (_) {
@@ -501,7 +505,7 @@ export async function renderExecutiveDashboard(request, env) {
         : \`<span style="font-size:42px;font-weight:900;background:linear-gradient(135deg,#60a5fa 0%,#a78bfa 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 10px rgba(96,165,250,0.5));letter-spacing:-1px;">\${val !== null && val !== undefined ? Number(val).toFixed(1) : '—'} min</span>\`;
 
       const totalLabel = noData
-        ? \`<div style="font-size:12px;color:#475569;margin-top:8px;">0 registros</div>\`
+        ? \`<div style="font-size:12px;color:#475569;margin-top:8px;">Sin pares ETA / hora real (no usa el conteo de OTIF cerrado)</div>\`
         : \`<div style="font-size:12px;color:#64748b;margin-top:8px;">\${etaStats.total_registros.toLocaleString('es-CL')} registros</div>\`;
 
       return \`
@@ -562,7 +566,7 @@ export async function renderExecutiveDashboard(request, env) {
         const data = await response.json();
 
         // Obtener tenant_id de los datos del dashboard o usar valor por defecto
-        const tenantId = data.tenantId ?? data.kpis?.tenant_id ?? 'default';
+        const tenantId = data.tenantId || 'empresa_base';
 
         // Cargar métricas ETA en paralelo
         const etaStats = await loadEtaStats(tenantId, period);
@@ -590,16 +594,23 @@ export async function renderExecutiveDashboard(request, env) {
         }).format(amount);
       };
 
-      // Formatear porcentaje
+      // Formatear porcentaje (null = no hay período anterior comparable)
+      const vsLabel = kpis.comparison_caption || 'vs período anterior';
       const formatPercent = (value) => {
-        const isPositive = value >= 0;
-        const absValue = Math.abs(value);
-        return \`\${isPositive ? '↗' : '↘'} \${absValue.toFixed(1)}%\`;
+        if (value == null || Number.isNaN(Number(value))) return 'Sin comparación';
+        const n = Number(value);
+        const isPositive = n >= 0;
+        return \`\${isPositive ? '↗' : '↘'} \${Math.abs(n).toFixed(1)}% \${vsLabel}\`;
+      };
+
+      const formatMoneyDelta = (actual, anterior) => {
+        if (anterior == null || !kpis.comparable) return 'Sin comparación';
+        return \`\${formatCLP(Number(actual) - Number(anterior))} \${vsLabel}\`;
       };
 
       // Determinar clase de comparación
       const getComparisonClass = (value, inverse = false) => {
-        if (value === 0) return 'neutral';
+        if (value == null || Number(value) === 0) return 'neutral';
         const isPositive = value > 0;
         if (inverse) return isPositive ? 'negative' : 'positive';
         return isPositive ? 'positive' : 'negative';
@@ -610,12 +621,12 @@ export async function renderExecutiveDashboard(request, env) {
 
         <!-- KPIs Principales -->
         <div class="kpi-grid">
-          <!-- OTIF -->
+          <!-- OTIF cerrado (entregas ENTREGADO/RECHAZADO) — distinto del OTIF proyectado de la Torre -->
           <div class="kpi-card">
-            <div class="kpi-label">🎯 OTIF Actual</div>
+            <div class="kpi-label">🎯 OTIF cerrado</div>
             <div class="kpi-value">\${kpis.otif.actual.toFixed(1)}%</div>
             <div class="kpi-comparison \${getComparisonClass(kpis.otif.cambio)}">
-              \${formatPercent(kpis.otif.cambio)} vs mes anterior
+              \${formatPercent(kpis.otif.cambio)}
             </div>
           </div>
 
@@ -624,25 +635,25 @@ export async function renderExecutiveDashboard(request, env) {
             <div class="kpi-label">✅ Entregas Exitosas</div>
             <div class="kpi-value">\${kpis.entregas.actual}</div>
             <div class="kpi-comparison \${getComparisonClass(kpis.entregas.crecimiento)}">
-              \${formatPercent(kpis.entregas.crecimiento)} vs mes anterior
+              \${formatPercent(kpis.entregas.crecimiento)}
             </div>
           </div>
 
           <!-- Ingresos -->
           <div class="kpi-card">
-            <div class="kpi-label">💰 Ingresos del Mes</div>
+            <div class="kpi-label">💰 Ingresos del período</div>
             <div class="kpi-value" style="font-size: 32px;">\${formatCLP(kpis.ingresos.actual)}</div>
             <div class="kpi-comparison \${getComparisonClass(kpis.ingresos.crecimiento)}">
-              \${formatPercent(kpis.ingresos.crecimiento)} vs mes anterior
+              \${formatPercent(kpis.ingresos.crecimiento)}
             </div>
           </div>
 
-          <!-- Multas -->
+          <!-- Multas históricas (cerradas) -->
           <div class="kpi-card">
-            <div class="kpi-label">⚠️ Multas Estimadas</div>
+            <div class="kpi-label">⚠️ Multas históricas</div>
             <div class="kpi-value" style="font-size: 32px;">\${formatCLP(kpis.multas.actual)}</div>
-            <div class="kpi-comparison \${getComparisonClass(kpis.multas.actual - kpis.multas.anterior, true)}">
-              \${formatCLP(kpis.multas.actual - kpis.multas.anterior)} vs mes anterior
+            <div class="kpi-comparison \${getComparisonClass(kpis.comparable ? (kpis.multas.actual - kpis.multas.anterior) : null, true)}">
+              \${formatMoneyDelta(kpis.multas.actual, kpis.multas.anterior)}
             </div>
           </div>
 

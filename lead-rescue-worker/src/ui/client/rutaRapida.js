@@ -23,7 +23,7 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
             if (b.estado === 'DISPONIBLE') return 1;
             return 0;
           });
-          selectChofer.innerHTML = '<option value="">-- Seleccionar chofer --</option>' +
+          selectChofer.innerHTML = '<option value="">-- Auto: usar N° de camiones del header --</option>' +
             sorted.map(function(c) {
               var estadoLabel = c.estado === 'OCUPADO' ? ' [EN RUTA]' : '';
               var score = (c.skill_score != null ? c.skill_score : 'N/A');
@@ -49,20 +49,17 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
           }
         }
 
-        window.abrirRutaRapida = function() {
+        window.abrirRutaRapida = function(opts) {
           document.getElementById('modalRutaRapida').style.display = 'flex';
-          // Pausar el polling mientras el modal está abierto
           if (window.viajesRefreshTimer) {
             clearInterval(window.viajesRefreshTimer);
             window.viajesRefreshTimer = null;
             window._pollingPausado = true;
           }
-          // Limpiar paradas anteriores y agregar una vacía
           document.getElementById('rrParadas').innerHTML = '';
           document.getElementById('rrChofer').value = '';
           document.getElementById('rrDescCarga').value = '';
           document.getElementById('rrCamionListo').checked = false;
-          // Resetear estado de validación
           document.getElementById('rrValidacionPanel').style.display = 'none';
           window._rrCoordsCacheadas = [];
           var btnEnviar = document.getElementById('btnEnviarRR');
@@ -73,9 +70,104 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
           btnEnviar.style.opacity = '0.5';
           document.getElementById('btnValidarRR').disabled = false;
           document.getElementById('btnValidarRR').textContent = '🔍 Validar Direcciones';
-          agregarParadaRR();
           rrRefrescarChoferes();
+          if (opts && opts.fromVideo) {
+            cargarBorradorVideoRR();
+            return;
+          }
+          agregarParadaRR();
         };
+
+        function rrEnableDespacho() {
+          var panel = document.getElementById('rrValidacionPanel');
+          var resumen = document.getElementById('rrValidacionResumen');
+          if (panel) panel.style.display = 'block';
+          if (resumen) {
+            resumen.innerHTML = '<span style="color:#10b981;font-weight:800;">✅ Direcciones listas. Revisá peso, ventanas y tipo de carga; después Crear y Despachar.</span>';
+          }
+          var btnEnviar = document.getElementById('btnEnviarRR');
+          if (btnEnviar) {
+            btnEnviar.disabled = false;
+            btnEnviar.style.background = 'linear-gradient(135deg,#f59e0b,#d97706)';
+            btnEnviar.style.color = 'white';
+            btnEnviar.style.cursor = 'pointer';
+            btnEnviar.style.opacity = '1';
+          }
+        }
+
+        async function cargarBorradorVideoRR() {
+          var loadSeq = (window._rrDraftLoadSeq || 0) + 1;
+          window._rrDraftLoadSeq = loadSeq;
+          try {
+            // Limpiar Flota/Backlog sucios para que el take del video empiece limpio (sin CLI)
+            try {
+              await rrFetch('/api/admin/qa/video-prep', {
+                method: 'POST',
+                body: JSON.stringify({ mode: 'empty' }),
+              });
+              if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+              if (typeof window.actualizarViajesSilencioso === 'function') {
+                await window.actualizarViajesSilencioso();
+              }
+            } catch (_) { /* si falla el wipe, igual cargamos el borrador */ }
+
+            const res = await rrFetch('/api/admin/qa/video-prep?mode=ruta_rapida_draft', { method: 'GET', headers: {} });
+            const data = await res.json().catch(function() { return {}; });
+            if (window._rrDraftLoadSeq !== loadSeq) return;
+            const draft = data && data.draft;
+            if (!draft || !Array.isArray(draft.paradas) || !draft.paradas.length) {
+              document.getElementById('rrParadas').innerHTML = '';
+              agregarParadaRR();
+              return;
+            }
+            document.getElementById('rrParadas').innerHTML = '';
+            document.getElementById('rrDescCarga').value = draft.descripcion_carga || '';
+            document.getElementById('rrCamionListo').checked = draft.camion_listo !== false;
+            var nCamEl = document.getElementById('camionesDisponibles');
+            if (nCamEl) nCamEl.value = '3';
+            var perfilEl = document.getElementById('perfilRuteo');
+            if (perfilEl) {
+              var eq = Array.from(perfilEl.options).find(function(o) {
+                return /equilibrad/i.test(o.text || '');
+              });
+              if (eq) perfilEl.value = eq.value;
+            }
+            window._rrCoordsCacheadas = [];
+            draft.paradas.forEach(function(p) {
+              agregarParadaRR();
+              var el = document.getElementById('rrParadas').lastElementChild;
+              if (!el) return;
+              if (el.querySelector('.rr-cliente')) el.querySelector('.rr-cliente').value = p.cliente || '';
+              if (el.querySelector('.rr-telefono')) el.querySelector('.rr-telefono').value = p.telefono || '';
+              if (el.querySelector('.rr-email')) el.querySelector('.rr-email').value = p.email || '';
+              if (el.querySelector('.rr-peso')) el.querySelector('.rr-peso').value = p.peso_kg != null ? p.peso_kg : '';
+              if (el.querySelector('.rr-volumen')) el.querySelector('.rr-volumen').value = p.volumen != null ? p.volumen : '';
+              if (el.querySelector('.rr-direccion')) {
+                el.querySelector('.rr-direccion').value = p.direccion || '';
+                if (p.lat != null) el.querySelector('.rr-direccion').dataset.lat = String(p.lat);
+                if (p.lng != null) el.querySelector('.rr-direccion').dataset.lng = String(p.lng);
+                el.querySelector('.rr-direccion').dataset.display = p.direccion || '';
+              }
+              if (el.querySelector('.rr-descripcion')) el.querySelector('.rr-descripcion').value = p.descripcion || '';
+              if (el.querySelector('.rr-monto')) el.querySelector('.rr-monto').value = p.monto != null ? p.monto : '';
+              if (el.querySelector('.rr-sla-hora')) el.querySelector('.rr-sla-hora').value = p.sla_hora || '18:00';
+              if (el.querySelector('.rr-ventana-inicio')) el.querySelector('.rr-ventana-inicio').value = p.ventana_inicio || '';
+              var tag = Array.isArray(p.tags) && p.tags[0] ? p.tags[0] : '';
+              if (el.querySelector('.rr-tags')) el.querySelector('.rr-tags').value = tag;
+              el.style.border = '1px solid #10b981';
+              window._rrCoordsCacheadas.push({
+                lat: p.lat, lng: p.lng, display: p.direccion, precision: p.precision || 'house'
+              });
+            });
+            rrEnableDespacho();
+            var btnValidar = document.getElementById('btnValidarRR');
+            if (btnValidar) { btnValidar.disabled = false; btnValidar.textContent = '🔄 Re-validar'; }
+          } catch (e) {
+            if (window._rrDraftLoadSeq !== loadSeq) return;
+            document.getElementById('rrParadas').innerHTML = '';
+            agregarParadaRR();
+          }
+        }
 
         window.cerrarRutaRapida = function() {
           document.getElementById('modalRutaRapida').style.display = 'none';
@@ -83,7 +175,9 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
           if (window._pollingPausado) {
             window._pollingPausado = false;
             if (typeof window.actualizarViajesSilencioso === 'function') {
+              if (window.viajesRefreshTimer) clearInterval(window.viajesRefreshTimer);
               window.viajesRefreshTimer = setInterval(window.actualizarViajesSilencioso, 5000);
+              window.actualizarViajesSilencioso();
             }
           }
         };
@@ -104,16 +198,25 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
             '</div>' +
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">' +
             '<input type="email" placeholder="Email (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-email" autocomplete="email">' +
-            '<input type="number" placeholder="Peso kg (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-peso" min="0" step="0.1">' +
+            '<select class="rr-tags" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:13px;background:#1e293b;color:#e2e8f0;" title="Tipo de carga — alimentos y peligrosa no van en el mismo camión">' +
+            '<option value="">Carga general</option>' +
+            '<option value="ALIMENTOS">Alimentos</option>' +
+            '<option value="PELIGROSO">Carga peligrosa</option>' +
+            '</select>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">' +
+            '<input type="number" placeholder="Peso kg" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-peso" min="0" step="0.1">' +
+            '<input type="number" placeholder="Volumen m³" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-volumen" min="0" step="0.1">' +
             '</div>' +
             '<div class="rr-dir-wrap" style="position:relative;margin-bottom:8px;">' +
             '<input type="text" placeholder="Empezá a escribir la dirección..." style="width:100%;padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;box-sizing:border-box;background:#1e293b;color:#e2e8f0;" class="rr-direccion" autocomplete="off" spellcheck="false">' +
             '<div class="rr-ac-list" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;background:#0f172a;border:1px solid #475569;border-radius:8px;max-height:240px;overflow-y:auto;box-shadow:0 16px 32px rgba(0,0,0,0.55);"></div>' +
             '</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;align-items:end;">' +
             '<input type="text" placeholder="Descripción bulto" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-descripcion">' +
             '<input type="number" placeholder="Monto (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-monto">' +
-            '<input type="number" placeholder="Horas SLA (def: 8)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-sla" min="1" max="72">' +
+            '<label style="display:flex;flex-direction:column;gap:4px;font-size:0.7rem;color:#94a3b8;font-weight:600;">Ventana desde<input type="time" min="00:00" max="23:59" step="60" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-ventana-inicio" title="Inicio de ventana horaria"></label>' +
+            '<label style="display:flex;flex-direction:column;gap:4px;font-size:0.7rem;color:#94a3b8;font-weight:600;">Hora límite SLA<input type="time" value="18:00" min="00:00" max="23:59" step="60" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-sla-hora" title="Hora del día (Chile) para cumplir el SLA"></label>' +
             '</div>' +
             (idx > 1 ? '<button onclick="this.parentElement.remove();renumerarParadas()" style="position:absolute;top:8px;right:8px;background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;">✕</button>' : '');
           container.appendChild(div);
@@ -483,7 +586,13 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
           const camion_listo = document.getElementById('rrCamionListo').checked;
           const descripcion_carga = document.getElementById('rrDescCarga').value.trim();
 
-          if (!chofer_id) { alert('Debes seleccionar un chofer'); return; }
+          if (!chofer_id) {
+            var nCam = parseInt((document.getElementById('camionesDisponibles') || {}).value, 10);
+            if (!Number.isInteger(nCam) || nCam < 2) {
+              alert('Elegí un chofer, o poné N° de camiones ≥ 2 en el header (modo equilibrado) para partir la flota.');
+              return;
+            }
+          }
 
           const paradaEls = document.getElementById('rrParadas').children;
           const paradas = [];
@@ -497,9 +606,15 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
               telefono: el.querySelector('.rr-telefono')?.value.trim() || null,
               email: el.querySelector('.rr-email')?.value.trim() || null,
               peso_kg: parseFloat(el.querySelector('.rr-peso')?.value) || 0,
+              volumen: parseFloat(el.querySelector('.rr-volumen')?.value) || 0,
               descripcion: el.querySelector('.rr-descripcion')?.value.trim() || null,
               monto: parseFloat(el.querySelector('.rr-monto')?.value) || 0,
-              sla_horas: parseInt(el.querySelector('.rr-sla')?.value) || 8,
+              sla_hora: el.querySelector('.rr-sla-hora')?.value || '18:00',
+              ventana_inicio: el.querySelector('.rr-ventana-inicio')?.value || null,
+              tags: (function() {
+                var t = el.querySelector('.rr-tags')?.value;
+                return t ? [t] : [];
+              })(),
             });
           }
 
@@ -525,11 +640,14 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
             const res = await rrFetch('/api/quick-route', {
               method: 'POST',
               body: JSON.stringify({
-                chofer_id: chofer_id,
+                chofer_id: chofer_id || null,
                 camion_listo,
                 descripcion_carga,
                 paradas,
-                depot_id: (document.getElementById('depotRuteo') || {}).value || null
+                depot_id: (document.getElementById('depotRuteo') || {}).value || null,
+                flota_disponible: parseInt((document.getElementById('camionesDisponibles') || {}).value, 10) || 1,
+                perfil_id: (document.getElementById('perfilRuteo') || {}).value || 1,
+                clima: (document.getElementById('climaRuteo') || {}).value || 'NORMAL',
               })
             });
             const data = await res.json().catch(function() { return {}; });
@@ -546,16 +664,32 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
               var kmStr = data.km_totales ? data.km_totales + ' km' : 'N/D';
               var costoStr = data.costo_operativo ? '$' + Number(data.costo_operativo).toLocaleString('es-CL') : 'N/D';
               var nl = String.fromCharCode(10);
+              var nViajes = data.viajes_creados || 1;
               alert('✅ Ruta creada exitosamente' + nl + nl +
-                'ID: ' + data.trip_id + nl +
+                (data.split_fleet ? ('Viajes: ' + nViajes + ' camiones' + nl) : ('ID: ' + data.trip_id + nl)) +
                 'Chofer: ' + data.chofer + nl +
                 'Paradas: ' + data.paradas_creadas + nl +
                 '📍 Distancia estimada: ' + kmStr + nl +
                 '💰 Costo operativo: ' + costoStr);
-              // Actualizar el panel sin recargar toda la página
-              if (typeof actualizarViajesSilencioso === 'function') {
-                actualizarViajesSilencioso();
+              // Refrescar flota/backlog/mapa sin recargar (usar window.*: esta fn vive en otro scope)
+              if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+              var refreshFn = typeof window.actualizarViajesSilencioso === 'function'
+                ? window.actualizarViajesSilencioso
+                : null;
+              if (refreshFn) {
+                try { await refreshFn(); } catch (_) { /* ignore */ }
+                // Segundo pase corto: el insert/optimizador a veces termina un tick después
+                setTimeout(function() {
+                  if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                  if (typeof window.actualizarViajesSilencioso === 'function') {
+                    window.actualizarViajesSilencioso();
+                  }
+                }, 800);
               }
+              // Si se crearon viajes, mostrar Flota; si quedaron pendientes, Backlog
+              var targetTab = (Number(nViajes) > 0) ? 'panel-flota' : 'panel-backlog';
+              var tabBtn = document.querySelector('.tab-btn[data-target="' + targetTab + '"]');
+              if (tabBtn) tabBtn.click();
             } else {
               alert('Error: ' + (data.error || 'Error desconocido'));
               // Reactivar botón de despacho si el error fue del servidor (no de validación)
@@ -574,13 +708,14 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
           }
         };
 
-        // Inicializar con 1 parada vacía al abrir
         var modalRR = document.getElementById('modalRutaRapida');
         if (modalRR) {
-          // Cerrar al hacer click en el fondo oscuro
           modalRR.addEventListener('click', function(e) {
             if (e.target === this) cerrarRutaRapida();
           });
+        }
+        if (/[?&]video=rr(?:&|$)/.test(String(location.search || ''))) {
+          setTimeout(function() { window.abrirRutaRapida({ fromVideo: true }); }, 800);
         }
 
         // Cerrar con ESC — reactiva el polling igual que cerrarRutaRapida()
@@ -620,7 +755,7 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
             var data = await res.json().catch(function() { return {}; });
             if (data.exito) {
               // Actualizar panel sin recargar — el filtro de terminales lo ocultará
-              if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso();
+              if (typeof window.actualizarViajesSilencioso === 'function') window.actualizarViajesSilencioso();
             } else {
               alert('Error al cancelar: ' + (data.error || ('HTTP ' + res.status)));
             }
@@ -668,7 +803,7 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
               if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
               setTimeout(function() {
                 cerrarEditarDireccion();
-                if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso();
+                if (typeof window.actualizarViajesSilencioso === 'function') window.actualizarViajesSilencioso();
               }, 1500);
             } else {
               resultado.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || 'Error desconocido') + '</span>';

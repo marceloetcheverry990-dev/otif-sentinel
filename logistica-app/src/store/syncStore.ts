@@ -1,10 +1,13 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import type {} from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { useAuthStore } from './authStore';
 import { uploadEvidencePhoto } from '../services/evidence';
 import { API_BASE_URL } from '../config/api';
+
+const { persist, createJSONStorage } =
+  require('zustand/middleware.js') as typeof import('zustand/middleware');
 
 const MAX_RETRIES = 3;
 

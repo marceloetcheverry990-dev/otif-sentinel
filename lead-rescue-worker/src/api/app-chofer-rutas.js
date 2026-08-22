@@ -144,8 +144,13 @@ export async function getChoferRutas(request, env) {
         typeof o.metadata === 'string'
           ? (() => { try { return JSON.parse(o.metadata); } catch { return {}; } })()
           : (o.metadata || {});
+      // Ruta Rápida: POD relajado para demo/video (foto/firma/QR opcionales)
+      const podBase =
+        meta.origen === 'RUTA_RAPIDA'
+          ? { pod_requirements: { foto: false, firma: false, scan: false, notas: false } }
+          : tenantSettings;
       const pod_requirements = resolvePodRequirements({
-        tenantSettings,
+        tenantSettings: podBase,
         orderMetadata: meta,
       });
       return {

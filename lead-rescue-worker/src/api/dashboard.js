@@ -9,6 +9,10 @@ import { withDb } from '../db.js';
 import { verifyOperatorToken } from '../helpers/operator-auth.js';
 import { listDepots, resolveDepot, depotToAppConfig } from '../helpers/depots.js';
 import { attachSlaRiskToViajes } from '../helpers/sla-risk.js';
+import {
+  getViajesPollCacheEntry,
+  setViajesPollCacheEntry,
+} from '../helpers/tower-poll-cache.js';
 
 // Helper para parseo ultra-seguro de metadata
 const safeParseMetadata = (metaRaw) => {
@@ -268,7 +272,7 @@ export async function renderControlTower(request, env, ctx) {
           AND LOWER(TRIM(c.nombre_cliente_raw)) = LOWER(TRIM(o.cliente))
          WHERE o.tenant_id = $1
            AND (
-             o.estado_operacional IN ('PENDIENTE_RUTEO', 'PENDIENTE')
+             o.estado_operacional IN ('PENDIENTE_RUTEO', 'PENDIENTE', 'PENDIENTE_CARGA')
              OR o.trip_id IS NOT NULL
            )
            AND (
@@ -318,7 +322,7 @@ export async function renderControlTower(request, env, ctx) {
         is_admin: !!auth.payload.is_admin,
         operator_id: auth.payload.sub || null,
       },
-      { depots, bodega: bodegaConfig },
+      { depots, bodega: bodegaConfig, dte_live: String(env.DTE_PROVIDER || '').toLowerCase() === 'simpleapi' && String(env.DTE_ALLOW_STUB || '').toLowerCase() !== 'true' },
     ),
     {
       headers: {
@@ -330,12 +334,15 @@ export async function renderControlTower(request, env, ctx) {
 }
 
 
-export async function getControlTowerViajesAPI(request, env, ctx) {
-  const auth = await verifyOperatorToken(request, env);
-  if (!auth.ok) return auth.response;
+export async function getControlTowerViajesAPI(request, env, ctx, operator = null) {
+  let tenant_id = operator?.tenant_id || null;
+  if (!tenant_id) {
+    const auth = await verifyOperatorToken(request, env);
+    if (!auth.ok) return auth.response;
+    tenant_id = auth.payload.tenant_id;
+  }
 
   const url = new URL(request.url);
-  const tenant_id = auth.payload.tenant_id;
   const requestedTenant = url.searchParams.get('tenant_id');
 
   const tenantError = requireTenantId(tenant_id);
@@ -347,8 +354,19 @@ export async function getControlTowerViajesAPI(request, env, ctx) {
     );
   }
 
+  // Cache corto en el isolate: el poll T.Real (~10s) no debe martillar Hyperdrive.
+  const cacheKey = `${tenant_id}|sla=${url.searchParams.get('sla') || '0'}`;
+  const cached = getViajesPollCacheEntry(cacheKey);
+  if (cached) {
+    return new Response(cached.body, {
+      headers: { "Content-Type": "application/json", ...getCorsHeaders(request, env), 'X-Poll-Cache': 'HIT' }
+    });
+  }
+
   try {
     return await withDb(env, async (client) => {
+      // Poll torre: coords desde orden (013) primero; join clientes exacto (sin LOWER/TRIM).
+      // HAVING: ocultar viajes 100% terminales que ensucian la flota.
       const resViajes = await client.query(`
       SELECT 
         o.trip_id, 
@@ -387,11 +405,13 @@ export async function getControlTowerViajesAPI(request, env, ctx) {
           'guia_folio', gd.folio,
           'guia_error', gd.error,
           'lat', COALESCE(
+            o.lat::double precision,
             CASE WHEN (o.metadata->>'lat_destino') ~ '^-?[0-9]+(\\.[0-9]+)?$'
               THEN (o.metadata->>'lat_destino')::double precision END,
             cli.lat
           ),
           'lng', COALESCE(
+            o.lng::double precision,
             CASE WHEN (o.metadata->>'lng_destino') ~ '^-?[0-9]+(\\.[0-9]+)?$'
               THEN (o.metadata->>'lng_destino')::double precision END,
             cli.lng
@@ -406,7 +426,7 @@ export async function getControlTowerViajesAPI(request, env, ctx) {
        AND fv.trip_id_actual = o.trip_id
       LEFT JOIN clientes cli
         ON cli.tenant_id = o.tenant_id
-       AND LOWER(TRIM(cli.nombre_cliente_raw)) = LOWER(TRIM(o.cliente))
+       AND cli.nombre_cliente_raw = o.cliente
       LEFT JOIN guias_despacho gd
         ON gd.tenant_id = o.tenant_id
        AND gd.ot_id = o.ot_id
@@ -417,21 +437,25 @@ export async function getControlTowerViajesAPI(request, env, ctx) {
           OR o.estado_operacional NOT IN ('CANCELADO_PLANILLA', 'RETORNO_BODEGA')
       )
       GROUP BY o.trip_id
+      HAVING COUNT(*) FILTER (
+        WHERE o.estado_operacional IS NULL
+           OR o.estado_operacional NOT IN ('ENTREGADO', 'RECHAZADO', 'CANCELADO_PLANILLA', 'RETORNO_BODEGA')
+      ) > 0
     `, [tenant_id]);
 
-      // Devolver solo las órdenes sin trip asignado (trip_id IS NULL) y en estado
-      // puramente pendiente. CAMION_ASIGNADO se excluye — esas ya tienen camión y
-      // deben aparecer en la flota, no en el panel de Pedidos Pendientes.
-      const resOrdenesSinViaje = await client.query(`
+      const [resOrdenesSinViaje, resChoferes, fleet_alerts] = await Promise.all([
+        client.query(`
       SELECT
         o.ot_id, o.cliente, o.valor_oc_clp, o.monto_total, o.uri,
         o.estado_operacional, o.trip_id, o.stop_sequence, o.eta,
         COALESCE(
+          o.lat::double precision,
           CASE WHEN (o.metadata->>'lat_destino') ~ '^-?[0-9]+(\\.[0-9]+)?$'
             THEN (o.metadata->>'lat_destino')::double precision END,
           c.lat
         ) AS lat,
         COALESCE(
+          o.lng::double precision,
           CASE WHEN (o.metadata->>'lng_destino') ~ '^-?[0-9]+(\\.[0-9]+)?$'
             THEN (o.metadata->>'lng_destino')::double precision END,
           c.lng
@@ -439,52 +463,56 @@ export async function getControlTowerViajesAPI(request, env, ctx) {
       FROM ordenes_pendientes o
       LEFT JOIN clientes c
         ON c.tenant_id = o.tenant_id
-       AND LOWER(TRIM(c.nombre_cliente_raw)) = LOWER(TRIM(o.cliente))
+       AND c.nombre_cliente_raw = o.cliente
       WHERE o.tenant_id = $1
         AND (o.trip_id IS NULL OR o.trip_id = '')
-        AND o.estado_operacional IN ('PENDIENTE_RUTEO', 'PENDIENTE')
+        AND o.estado_operacional IN ('PENDIENTE_RUTEO', 'PENDIENTE', 'PENDIENTE_CARGA')
       ORDER BY o.created_at DESC
       LIMIT 200
-    `, [tenant_id]);
-
-      const resChoferes = await client.query(
-        `SELECT chofer_id, nombre_completo, skill_score, estado, rut, gps_interval_seconds
-         FROM choferes
-         WHERE tenant_id = $1 AND estado IN ('DISPONIBLE', 'OCUPADO')
-         ORDER BY estado ASC, nombre_completo ASC`,
-        [tenant_id],
-      );
-
-      let fleet_alerts = [];
-      try {
-        const resAlerts = await client.query(
+    `, [tenant_id]),
+        client.query(
+          `SELECT chofer_id, nombre_completo, skill_score, estado, rut, gps_interval_seconds
+           FROM choferes
+           WHERE tenant_id = $1 AND estado IN ('DISPONIBLE', 'OCUPADO')
+           ORDER BY estado ASC, nombre_completo ASC`,
+          [tenant_id],
+        ),
+        client.query(
           `SELECT id, trip_id, alert_type, severity, status, stuck_minutes, lat, lng, payload, created_at, updated_at
            FROM fleet_alerts
            WHERE tenant_id = $1 AND status IN ('OPEN', 'ACKED', 'RESCUING')
+             AND (status = 'RESCUING' OR COALESCE(stuck_minutes, 0) < $2)
            ORDER BY
              CASE severity WHEN 'RED' THEN 0 ELSE 1 END,
              updated_at DESC
            LIMIT 20`,
-          [tenant_id]
-        );
-        fleet_alerts = resAlerts.rows;
-      } catch (alertErr) {
-        if (alertErr.code !== '42P01') {
-          console.warn('[LIVE_VIAJES_ALERTS]', alertErr.message);
-        }
-      }
+          [tenant_id, CONFIG.LEAD_RESCUE.STALE_ALERT_MAX_MIN]
+        ).then((r) => r.rows).catch((alertErr) => {
+          if (alertErr.code !== '42P01') {
+            console.warn('[LIVE_VIAJES_ALERTS]', alertErr.message);
+          }
+          return [];
+        }),
+      ]);
 
       const viajes = resViajes.rows;
-      await attachSlaRiskToViajes(client, tenant_id, viajes);
+      // SLA enrichment es caro (métricas); no bloquear el poll en vivo de la Torre.
+      // Se puede forzar con ?sla=1 si un panel lo necesita.
+      if (url.searchParams.get('sla') === '1') {
+        await attachSlaRiskToViajes(client, tenant_id, viajes);
+      }
 
-      return new Response(JSON.stringify({
+      const body = JSON.stringify({
         exito: true,
         viajes,
         ordenes_pendientes: resOrdenesSinViaje.rows,
         choferes: resChoferes.rows,
         fleet_alerts,
-      }), {
-        headers: { "Content-Type": "application/json", ...getCorsHeaders(request, env) }
+      });
+      setViajesPollCacheEntry(cacheKey, body);
+
+      return new Response(body, {
+        headers: { "Content-Type": "application/json", ...getCorsHeaders(request, env), 'X-Poll-Cache': 'MISS' }
       });
     }, { statementTimeout: 12000, tenantId: tenant_id });
   } catch (err) {
