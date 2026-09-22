@@ -7,45 +7,19 @@
 import { createClient } from '@supabase/supabase-js';
 import { CORS_HEADERS, requireTenantId } from '../config.js';
 import { resolveDestinoCoords } from '../helpers/destino-coords.js';
-import {
-  solveVrpAuto,
-  calcularDistanciaKm,
-} from '../helpers/vrp-solver.js';
+import { solveVrpAuto } from '../helpers/vrp-solver.js';
 import { resolveDepot, depotToSolver } from '../helpers/depots.js';
 import {
   splitFrozenOpen,
   pickBestTripForInsert,
   rebuildSequences,
 } from '../helpers/midday-reopt.js';
+import { estimateOpenEtas } from '../helpers/recalcular-ruteo.js';
 import { enrichOrdersWithSlaRisk } from '../helpers/sla-risk.js';
 import { getEffectiveSpeedKmh, applyClimaToSpeed } from '../helpers/speed-calibration.js';
 import { CONFIG } from '../config.js';
 import { computeScanToken } from '../helpers/scan-token.js';
-
-/** M-16: ETA en cascada desde seed (GPS / última frozen / depot). */
-function estimateOpenEtas(openStops, seed, velocidadKmH) {
-  const vel = Math.max(5, Number(velocidadKmH) || 35);
-  let tMs = Date.now();
-  let lat = Number(seed?.lat);
-  let lng = Number(seed?.lng);
-  const map = new Map();
-  for (const s of openStops || []) {
-    if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) continue;
-    if (Number.isFinite(lat) && Number.isFinite(lng)) {
-      const km = calcularDistanciaKm(lat, lng, s.lat, s.lng) * 1.2;
-      tMs += (km / vel) * 3600 * 1000;
-    } else {
-      tMs += 20 * 60 * 1000;
-    }
-    const etaIso = new Date(tMs).toISOString();
-    map.set(s.ot_id, etaIso);
-    // servicio corto por defecto (B2C); mid-day no tiene diccionario ML
-    tMs += 5 * 60 * 1000;
-    lat = s.lat;
-    lng = s.lng;
-  }
-  return map;
-}
+import { unionTags } from '../helpers/cargo-constraints.js';
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -311,7 +285,12 @@ export async function reoptimizarMidday(request, env, ctx, operator = null) {
         capacityWeight: chofer?.capacidad_peso || 99999,
         seed,
         depot,
+        // tags = certificación del chofer (capacidad de llevar X). cargoTags =
+        // lo que ya va físicamente a bordo (frozen EN_SITIO + open) — son cosas
+        // distintas: la segregación HAZMAT/FOOD debe chequear contra la carga
+        // real, no contra si el chofer tiene el tag en su perfil.
         tags: chofer?.tags || [],
+        cargoTags: unionTags(aboard),
         velocidadKmH: velocidad,
       });
     }
@@ -388,7 +367,11 @@ export async function reoptimizarMidday(request, env, ctx, operator = null) {
                 ...(etaIso ? { eta: etaIso } : {}),
               })
               .eq('ot_id', s.ot_id)
-              .eq('tenant_id', tenant_id);
+              .eq('tenant_id', tenant_id)
+              // El chofer puede haber cerrado esta parada mientras el solver
+              // corría (ETA/scan-token son async) — no revivir una parada ya
+              // terminal con el snapshot viejo.
+              .not('estado_operacional', 'in', '("ENTREGADO","RECHAZADO","EN_SITIO","CANCELADO_PLANILLA")');
           })()
         );
       }

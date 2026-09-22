@@ -8,6 +8,7 @@ import {
   createOperatorSessionCookie,
   signOperatorToken,
   verifySameOrigin,
+  revokeOperatorJti,
 } from '../helpers/operator-auth.js';
 import { authenticateTowerOperator } from '../helpers/tower-operators.js';
 import { writeAuditLog } from '../helpers/audit-log.js';
@@ -171,11 +172,16 @@ export async function handleOperatorLogout(request, env) {
   const origin = verifySameOrigin(request, { allowBearer: false });
   if (!origin.ok) return origin.response;
 
-  // Intentar anotar quién cerró sesión (si hay cookie válida)
+  // Revocar el jti (logout real) y anotar quién cerró sesión (si hay cookie válida).
+  // Antes solo se borraba la cookie: el JWT firmado seguía siendo válido hasta
+  // sus 8h de exp si alguien lo había copiado (XSS, log, etc.).
   try {
     const { verifyOperatorToken } = await import('../helpers/operator-auth.js');
     const auth = await verifyOperatorToken(request, env);
     if (auth.ok) {
+      if (auth.payload.jti && typeof auth.payload.exp === 'number') {
+        await revokeOperatorJti(auth.payload.jti, auth.payload.exp, env);
+      }
       await writeAuditLog(env, {
         tenant_id: auth.payload.tenant_id,
         operator_id: auth.payload.sub || null,

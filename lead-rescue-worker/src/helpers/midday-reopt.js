@@ -110,13 +110,18 @@ export function pickBestTripForInsert(trips, candidate, { depot = DEFAULT_DEPOT 
       if (!ok) continue;
     }
     const tripDepot = trip.depot || depot;
+    // Segregación HAZMAT/FOOD: contra la carga que ya va físicamente a bordo
+    // (cargoTags), no contra la certificación del chofer (tripTags) — un
+    // chofer sin tags propios no debería poder mezclar carga incompatible
+    // solo porque su perfil no dice nada.
+    const cargoTags = Array.isArray(trip.cargoTags) ? trip.cargoTags : tripTags;
     const ins = bestInsertion(trip.open, candidate, {
       seed: trip.seed,
       capacity: trip.capacity,
       capacityWeight: trip.capacityWeight ?? Infinity,
       currentVolume: trip.volume,
       currentWeight: trip.weight ?? 0,
-      existingTags: tripTags,
+      existingTags: cargoTags,
       depot: tripDepot,
       startMs: trip.startMs || Date.now(),
       velocidadKmH: trip.velocidadKmH || 35,

@@ -43,6 +43,23 @@ PIN_PEPPER=generate_another_32_byte_secret
 # DTE_RUT_EMISOR=76.XXXXXX-X
 # DTE_RAZON_SOCIAL=Tu Distribuidora SpA
 
+# Webhooks de ingesta de órdenes (genérico /api/webhooks/orders y por plataforma
+# /api/webhooks/{shopify,woocommerce,sap,netsuite,pos}). Preferir SIEMPRE un
+# secreto propio por tenant — un secreto compartido entre tenants permite que
+# cualquiera que lo conozca falsifique la firma HMAC bajo el X-Tenant-Id que
+# quiera, porque ese header no tiene ninguna otra verificación de ownership.
+# ORDER_INGEST_SECRETS={"empresa_base":"secreto_unico_de_ese_tenant"}
+# PLATFORM_WEBHOOK_SECRETS={"shopify:empresa_base":"secreto_shopify_de_ese_tenant"}
+# Fallback a un secreto único compartido (single-tenant/dev). En multi-tenant NO usar.
+# ORDER_INGEST_ALLOW_GLOBAL_SECRET=true
+# PLATFORM_WEBHOOK_ALLOW_GLOBAL_SECRET=true
+# ORDER_INGEST_SECRET=replace_me
+# SHOPIFY_WEBHOOK_SECRET=replace_me
+# WOOCOMMERCE_WEBHOOK_SECRET=replace_me
+# SAP_WEBHOOK_SECRET=replace_me
+# NETSUITE_WEBHOOK_SECRET=replace_me
+# POS_WEBHOOK_SECRET=replace_me
+
 # Staging DB (nunca la URI de producción). Usar con npm run provision:staging-db
 # STAGING_DATABASE_URL=postgresql://user:password@host:5432/postgres?sslmode=require
 
@@ -57,3 +74,6 @@ PIN_PEPPER=generate_another_32_byte_secret
 
 # Hyperdrive local development is configured in the shell, not in this file:
 # CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=postgresql://user:password@host:5432/database?sslmode=require
+
+# Piloto: escaneo QR desconectado (foto/firma sí). Reactivar con true.
+# POD_SCAN_ENABLED=false

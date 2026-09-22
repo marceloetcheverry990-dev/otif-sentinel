@@ -228,7 +228,8 @@ export async function syncExcel(request, env, ctx, operator = null) {
             estado_operacional = 'PENDIENTE_RUTEO',
             trip_id = NULL,
             chofer_asignado_id = NULL
-          WHERE ordenes_pendientes.estado_operacional IN ('PENDIENTE_RUTEO', 'PICKING', 'PACKING', 'STAGING', 'ATRASO')
+          -- PICKING/PACKING son estados del WMS (pedido físicamente en bodega): el CSV no los pisa.
+          WHERE ordenes_pendientes.estado_operacional IN ('PENDIENTE_RUTEO', 'STAGING', 'ATRASO')
         `, [arrOtId, arrCliente, arrValorOc, arrSlaIso, arrMetadata, arrMontoTotal, arrUri, tenant_id]);
         console.log('[SYNC] ordenes upsert rowCount=', upsertOrdenes.rowCount);
 
@@ -280,7 +281,8 @@ export async function syncExcel(request, env, ctx, operator = null) {
         UPDATE ordenes_pendientes 
         SET estado_operacional = 'CANCELADO_PLANILLA'
         WHERE tenant_id = $2
-        AND estado_operacional IN ('PENDIENTE_RUTEO', 'PICKING', 'PACKING', 'STAGING', 'ATRASO')
+        -- Sin PICKING/PACKING: cancelar un pedido a medio empacar dejaba su stock reservado para siempre.
+        AND estado_operacional IN ('PENDIENTE_RUTEO', 'STAGING', 'ATRASO')
         AND NOT (ot_id = ANY($1::text[]))
       `, [idsPresentes, tenant_id]);
       console.log('[SYNC]', {

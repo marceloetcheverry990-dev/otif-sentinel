@@ -7,7 +7,12 @@ import { API_BASE_URL as API_URL } from '../config/api';
 const { persist, createJSONStorage } =
   require('zustand/middleware.js') as typeof import('zustand/middleware');
 
-// expo-secure-store no funciona en web — usar localStorage como fallback
+// expo-secure-store no funciona en web — usar localStorage como fallback.
+// DEV-ONLY: el build web (`npm run web`) es solo para desarrollo local, nunca
+// se distribuye a choferes reales (no hay script de build/deploy web en
+// package.json — solo apk:staging/apk:prod/aab:prod, ambos nativos con
+// SecureStore real). Si eso cambia, este fallback deja de ser aceptable:
+// localStorage es legible por cualquier JS de la página (XSS incluido).
 const secureStorage =
   Platform.OS === 'web'
     ? {

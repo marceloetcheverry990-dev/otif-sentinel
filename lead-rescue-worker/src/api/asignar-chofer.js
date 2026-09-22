@@ -41,10 +41,16 @@ export async function handleAsignarChofer(request, env, operator = null) {
     const result = await withDbTransaction(env, async (client) => {
       const tripIdStr = String(trip_id).trim();
 
+      // FOR UPDATE: serializa asignaciones concurrentes sobre el mismo trip_id.
+      // Sin esto, dos requests simultáneas leen el mismo chofer_asignado_id
+      // "previo" (ninguna ve el cambio de la otra), y la limpieza de choferes
+      // previos de más abajo nunca libera al chofer que quedó pisado —
+      // termina OCUPADO en la tabla choferes sin ningún viaje abierto real.
       const tripCheck = await client.query(
         `SELECT ot_id, estado_operacional, chofer_asignado_id
          FROM ordenes_pendientes
-         WHERE tenant_id = $1 AND trip_id = $2`,
+         WHERE tenant_id = $1 AND trip_id = $2
+         FOR UPDATE`,
         [tenant_id, tripIdStr]
       );
       if (tripCheck.rowCount === 0) {

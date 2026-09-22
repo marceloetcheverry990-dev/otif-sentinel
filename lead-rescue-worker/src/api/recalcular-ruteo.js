@@ -336,7 +336,10 @@ export async function recalcularRuteo(request, env, ctx, operator = null) {
               : 'CAMION_ASIGNADO',
             metadata,
             ...(etaIso ? { eta: etaIso } : {}),
-          }).eq('ot_id', s.ot_id).eq('tenant_id', tenant_id);
+          }).eq('ot_id', s.ot_id).eq('tenant_id', tenant_id)
+            // El chofer puede haber cerrado esta parada mientras corría el
+            // recálculo (scan-token/ETA son async) — no revivir con el snapshot viejo.
+            .not('estado_operacional', 'in', '("ENTREGADO","RECHAZADO","EN_SITIO","CANCELADO_PLANILLA")');
         })());
       }
       if (tripId) {

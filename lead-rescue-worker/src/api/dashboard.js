@@ -8,7 +8,9 @@ import { renderControlTowerDashboard } from '../ui.js';
 import { withDb } from '../db.js';
 import { verifyOperatorToken } from '../helpers/operator-auth.js';
 import { listDepots, resolveDepot, depotToAppConfig } from '../helpers/depots.js';
+import { getTenantSettings } from '../helpers/tenant-settings.js';
 import { attachSlaRiskToViajes } from '../helpers/sla-risk.js';
+import { isWmsEnabled } from '../helpers/wms-stock.js';
 import {
   getViajesPollCacheEntry,
   setViajesPollCacheEntry,
@@ -23,10 +25,14 @@ const safeParseMetadata = (metaRaw) => {
   return metaRaw;
 };
 
-export async function renderReporte(request, env, ctx) {
+export async function renderReporte(request, env, ctx, operator = null) {
   const url = new URL(request.url);
   const rawOtId = url.searchParams.get("id");
   if (!rawOtId) return new Response("Error: ID de Orden no especificado.", { status: 400 });
+
+  const tenant_id = operator?.tenant_id;
+  const tenantError = requireTenantId(tenant_id);
+  if (tenantError) return tenantError;
 
   const otId = escapeHTML(rawOtId);
   let math = null;
@@ -35,7 +41,7 @@ export async function renderReporte(request, env, ctx) {
   try {
     await withDb(env, async (client) => {
     // [ARREGLO DE ARQUITECTO]: Leemos metadata de ordenes_pendientes
-    const resOT = await client.query(`SELECT metadata FROM ordenes_pendientes WHERE ot_id = $1 LIMIT 1`, [rawOtId]);
+    const resOT = await client.query(`SELECT metadata FROM ordenes_pendientes WHERE ot_id = $1 AND tenant_id = $2 LIMIT 1`, [rawOtId, tenant_id]);
     let isLocked = false;
       if (resOT.rowCount > 0) 
       {
@@ -57,9 +63,10 @@ export async function renderReporte(request, env, ctx) {
           UPDATE ordenes_pendientes
           SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object( 'analysis_locked', true, 'lock_id', $2::text)
           WHERE ot_id = $1
+          AND tenant_id = $3
           AND COALESCE((metadata->>'analysis_locked')::boolean, false) = false
           RETURNING ot_id
-          `, [rawOtId, lockId]
+          `, [rawOtId, lockId, tenant_id]
         );
 
         if (lockRes.rowCount > 0) 
@@ -68,11 +75,11 @@ export async function renderReporte(request, env, ctx) {
             const bgClient = new Client(CONFIG.DB_OPTS(env));
             try {
                 await bgClient.connect();
-                const resData = await bgClient.query(`SELECT ot_id, cliente, estado_operacional FROM ordenes_pendientes WHERE ot_id = $1`, [rawOtId]);
+                const resData = await bgClient.query(`SELECT ot_id, cliente, estado_operacional FROM ordenes_pendientes WHERE ot_id = $1 AND tenant_id = $2`, [rawOtId, tenant_id]);
 
               if (resData.rowCount > 0) {
                 const row = resData.rows[0];
-                const aiAnalysis = await evaluateOTRiskWithOpenAI(row, env, bgClient);
+                const aiAnalysis = await evaluateOTRiskWithOpenAI(row, env, bgClient, tenant_id);
 
                 if (!aiAnalysis || !aiAnalysis.ia || !aiAnalysis.matematica) {
                   throw new Error("Respuesta de IA incompleta o inválida");
@@ -82,8 +89,9 @@ export async function renderReporte(request, env, ctx) {
                   UPDATE ordenes_pendientes
                   SET metadata = (metadata - 'analysis_locked' - 'lock_id') || jsonb_build_object('analysis', $3::jsonb)
                   WHERE ot_id = $1
+                  AND tenant_id = $4
                   AND metadata->>'lock_id' = $2
-                  `, [rawOtId, lockId, JSON.stringify(aiAnalysis)]
+                  `, [rawOtId, lockId, JSON.stringify(aiAnalysis), tenant_id]
                 );
 
                 if (upd.rowCount === 0) {
@@ -93,11 +101,12 @@ export async function renderReporte(request, env, ctx) {
                 else 
                 {
                   await bgClient.query(`
-                    UPDATE ordenes_pendientes 
-                    SET metadata = metadata - 'analysis_locked' - 'lock_id' 
-                    WHERE ot_id = $1 
+                    UPDATE ordenes_pendientes
+                    SET metadata = metadata - 'analysis_locked' - 'lock_id'
+                    WHERE ot_id = $1
+                    AND tenant_id = $3
                     AND metadata->>'lock_id' = $2
-                    `, [rawOtId, lockId]);
+                    `, [rawOtId, lockId, tenant_id]);
                 }
             }
               catch (bgErr) 
@@ -107,8 +116,9 @@ export async function renderReporte(request, env, ctx) {
                     UPDATE ordenes_pendientes
                     SET metadata = metadata - 'analysis_locked' - 'lock_id'
                     WHERE ot_id = $1
+                    AND tenant_id = $3
                     AND metadata->>'lock_id' = $2
-                  `, [rawOtId, lockId]).catch(()=>{});
+                  `, [rawOtId, lockId, tenant_id]).catch(()=>{});
               }
               
               finally
@@ -119,10 +129,10 @@ export async function renderReporte(request, env, ctx) {
           })());
         }
     }
-    }, { statementTimeout: 5000 });
-  } 
-  catch (err) { 
-    console.error("[REPORT_DB_ERROR]", err.message); 
+    }, { statementTimeout: 5000, tenantId: tenant_id });
+  }
+  catch (err) {
+    console.error("[REPORT_DB_ERROR]", err.message);
   }
 
   if (!math || !ia) {
@@ -306,6 +316,14 @@ export async function renderControlTower(request, env, ctx) {
     console.warn('[CONTROL_TOWER_DEPOTS]', e.message);
   }
 
+  let wmsEnabled = false;
+  try {
+    const ts = await getTenantSettings(env, tenant_id);
+    wmsEnabled = isWmsEnabled(env, ts);
+  } catch (e) {
+    console.warn('[CONTROL_TOWER_WMS]', e.message);
+  }
+
   return new Response(
     renderControlTowerDashboard(
       ordenes,
@@ -322,7 +340,12 @@ export async function renderControlTower(request, env, ctx) {
         is_admin: !!auth.payload.is_admin,
         operator_id: auth.payload.sub || null,
       },
-      { depots, bodega: bodegaConfig, dte_live: String(env.DTE_PROVIDER || '').toLowerCase() === 'simpleapi' && String(env.DTE_ALLOW_STUB || '').toLowerCase() !== 'true' },
+      {
+        depots,
+        bodega: bodegaConfig,
+        dte_live: String(env.DTE_PROVIDER || '').toLowerCase() === 'simpleapi' && String(env.DTE_ALLOW_STUB || '').toLowerCase() !== 'true',
+        wms_enabled: wmsEnabled,
+      },
     ),
     {
       headers: {

@@ -1,7 +1,12 @@
 // src/utils.js//Aquí van las funciones de ayuda matemática y de formateo.
 
 export function escapeHTML(text = '') {
-  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /** ID DOM estable y único por trip_id (hex padded, sin truncar — evita colisiones SPOT-…-001/-002). */

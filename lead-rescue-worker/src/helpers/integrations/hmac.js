@@ -61,7 +61,18 @@ export async function verifyWooHmac(rawBody, signatureBase64, secret) {
 
 /**
  * Resuelve secreto por plataforma+tenant.
- * Orden: PLATFORM_WEBHOOK_SECRETS["shopify:tenant"] → SHOPIFY_WEBHOOK_SECRET → ORDER_INGEST_SECRET
+ * Orden: PLATFORM_WEBHOOK_SECRETS["shopify:tenant"] (siempre) →
+ * PLATFORM_WEBHOOK_SECRETS["shopify"] / SHOPIFY_WEBHOOK_SECRET / ORDER_INGEST_SECRET
+ * (solo con PLATFORM_WEBHOOK_ALLOW_GLOBAL_SECRET=true).
+ *
+ * El tenant viene de X-Tenant-Id / ?tenant / body.tenant_id sin verificación
+ * de ownership (ver platform-ingest-webhook.js:resolveTenant) — la única
+ * atadura real entre "quién firma" y "de qué tenant dice ser" es que el
+ * secreto usado para validar la firma sea EXCLUSIVO de ese tenant. Un
+ * secreto compartido entre tenants (o entre toda una plataforma) rompe esa
+ * atadura: cualquiera que conozca su propio secreto Shopify puede forjar
+ * una firma válida e inyectar órdenes bajo el tenant_id de otro cliente.
+ * Mismo patrón que DTE_ALLOW_GLOBAL_IDENTITY (ver resolve-dte-env.js).
  */
 export function resolvePlatformSecret(env, platform, tenantId) {
   const tid = String(tenantId || '').trim();
@@ -71,6 +82,17 @@ export function resolvePlatformSecret(env, platform, tenantId) {
       const map = JSON.parse(env.PLATFORM_WEBHOOK_SECRETS);
       const key = `${plat}:${tid}`;
       if (map && typeof map[key] === 'string' && map[key]) return map[key];
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  const allowGlobal = String(env.PLATFORM_WEBHOOK_ALLOW_GLOBAL_SECRET || '').toLowerCase() === 'true';
+  if (!allowGlobal) return null;
+
+  if (env.PLATFORM_WEBHOOK_SECRETS) {
+    try {
+      const map = JSON.parse(env.PLATFORM_WEBHOOK_SECRETS);
       if (map && typeof map[plat] === 'string' && map[plat]) return map[plat];
     } catch (_) {
       /* ignore */

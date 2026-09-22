@@ -4,7 +4,9 @@ import { CORS_HEADERS, requireTenantId } from '../config.js';
 import { signDriverToken } from '../helpers/driver-auth.js';
 import {
   DRIVER_AUTH_LIMITS,
+  LOGIN_ACCOUNT_LIMIT,
   enforceDriverAuthRateLimit,
+  enforceAccountRateLimit,
 } from '../helpers/driver-auth-rate-limit.js';
 import { hashPin, verifyPin } from '../helpers/pin-kdf.js';
 
@@ -19,8 +21,9 @@ function json(body, status = 200) {
 
 export async function loginChofer(request, env) {
   try {
-    const limited = enforceDriverAuthRateLimit(
+    const limited = await enforceDriverAuthRateLimit(
       request,
+      env,
       DRIVER_AUTH_LIMITS.login.endpoint,
       DRIVER_AUTH_LIMITS.login.limit,
       DRIVER_AUTH_LIMITS.login.windowMs
@@ -36,6 +39,18 @@ export async function loginChofer(request, env) {
     if (!rut || !pin) {
       return json({ error: 'Bad Request: Se requieren credenciales (rut, pin)' }, 400);
     }
+
+    // Límite por cuenta (independiente de IP) — un atacante rotando de IP
+    // no debe poder seguir probando PINs contra el mismo rut sin límite.
+    const acctLimited = await enforceAccountRateLimit(
+      env,
+      DRIVER_AUTH_LIMITS.login.endpoint,
+      tenant_id,
+      rut,
+      LOGIN_ACCOUNT_LIMIT.limit,
+      LOGIN_ACCOUNT_LIMIT.windowMs
+    );
+    if (acctLimited) return acctLimited;
 
     const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY, {
       auth: { persistSession: false },

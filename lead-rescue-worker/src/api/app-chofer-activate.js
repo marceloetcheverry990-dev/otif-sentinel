@@ -28,8 +28,9 @@ function timingSafeEqualString(a, b) {
 
 export async function activateChofer(request, env) {
   try {
-    const limited = enforceDriverAuthRateLimit(
+    const limited = await enforceDriverAuthRateLimit(
       request,
+      env,
       DRIVER_AUTH_LIMITS.activate.endpoint,
       DRIVER_AUTH_LIMITS.activate.limit,
       DRIVER_AUTH_LIMITS.activate.windowMs

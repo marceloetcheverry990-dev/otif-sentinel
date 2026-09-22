@@ -15,7 +15,8 @@
 		"deploy:staging": "wrangler deploy --env staging",
 		"dry-run:staging": "wrangler deploy --env staging --dry-run",
 		"provision:staging-db": "node scripts/provision-staging-db.mjs",
-		"r8:abuse": "node scripts/r8-abuse-probes.mjs"
+		"r8:abuse": "node scripts/r8-abuse-probes.mjs",
+		"regression:staging": "node scripts/regression-staging.mjs"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.12.4",

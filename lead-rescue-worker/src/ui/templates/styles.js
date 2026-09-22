@@ -377,6 +377,30 @@ export const DASHBOARD_STYLES = `
         .backlog-item { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warning); border-radius: 6px; padding: 1rem; margin-bottom: 0.75rem; }
         .backlog-item.has-coords { cursor: pointer; }
         .backlog-item.has-coords:hover { border-color: var(--border-focus); }
+
+        /* BODEGA WMS-LITE */
+        .bodega-wrap { display: flex; flex-direction: column; gap: 0.9rem; }
+        .bodega-counts { font-size: 0.8rem; color: var(--text-muted); font-weight: 700; }
+        .bodega-h { font-size: 0.9rem; font-weight: 800; color: var(--text-main); margin-top: 0.2rem; }
+        .bodega-alert { padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 0.8rem; }
+        .bodega-alert ul { margin: 0.45rem 0 0 1rem; }
+        .bodega-alert-warn { border-color: #7c2d12; background: #451a03; color: #fdba74; }
+        .bodega-alert-danger { border-color: #7f1d1d; background: #450a0a; color: #fca5a5; }
+        .bodega-alert-ok { border-color: #065f46; background: #064e3b; color: #6ee7b7; }
+        .bodega-form { display: grid; grid-template-columns: 1.1fr 1fr 1.5fr 1fr 1fr 1fr auto; gap: 0.45rem; }
+        .bodega-form input, .bodega-form select {
+          padding: 0.45rem 0.55rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main);
+        }
+        .bodega-ot {
+          display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+          background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem;
+        }
+        .bodega-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+        .bodega-table th, .bodega-table td { padding: 0.5rem; border-bottom: 1px solid var(--border); text-align: left; }
+        .bodega-row-warn { background: rgba(245, 158, 11, 0.12); }
+        .btn-bodega { padding: 0.45rem 0.7rem; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; cursor: pointer; font-weight: 700; }
+        .btn-bodega-ok { background: #065f46; border-color: #047857; color: #d1fae5; }
+        .bodega-muted { color: var(--text-muted); font-size: 0.8rem; }
         
         /* MAP AREA */
         .map-container { flex: 1; position: relative; background: #e2e8f0; }

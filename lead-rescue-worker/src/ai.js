@@ -31,26 +31,29 @@ function buildDeterministicIA(contextoMatematico, riesgoFisico, viabilidadFinanc
   };
 }
 
-export async function evaluateOTRiskWithOpenAI(otData, env, dbClient) {
+export async function evaluateOTRiskWithOpenAI(otData, env, dbClient, tenantId = null) {
   let fallbackDecision = "Revisar costos manualmente (Error previo al motor financiero).";
   let riesgoSeguro = "MEDIO";
 
   try {
     const clienteName = otData.cliente || "DEFAULT";
+    // Cache por tenant: dos tenants con un cliente del mismo nombre no deben
+    // compartir reglas de SLA/pricing.
+    const cacheKey = `${tenantId || 'sin_tenant'}:${clienteName}`;
     let reglasCliente;
-    
-    const cachedSLA = SLA_CACHE.get(clienteName);
+
+    const cachedSLA = SLA_CACHE.get(cacheKey);
     if (cachedSLA && cachedSLA.expires > Date.now()) {
       reglasCliente = cachedSLA.data;
     } else {
       const resMatrix = await dbClient.query(`
         SELECT penalidad, costo_mitigacion, horas_criticas, distancia_km, valor_orden_compra, porcentaje_multa_diaria
-        FROM client_sla_matrix WHERE cliente = $1 OR cliente = 'DEFAULT' ORDER BY cliente = $1 DESC LIMIT 1
-      `, [clienteName]);
+        FROM client_sla_matrix WHERE tenant_id = $2 AND (cliente = $1 OR cliente = 'DEFAULT') ORDER BY cliente = $1 DESC LIMIT 1
+      `, [clienteName, tenantId]);
       if (resMatrix.rowCount === 0) throw new Error("SLA_MATRIX_EMPTY_OR_DEFAULT_DELETED");
       reglasCliente = resMatrix.rows[0];
       cleanSLACache();
-      SLA_CACHE.set(clienteName, { data: reglasCliente, expires: Date.now() + 300000 });
+      SLA_CACHE.set(cacheKey, { data: reglasCliente, expires: Date.now() + 300000 });
     }
 
     const base = Number(otData.produccion_estandar);

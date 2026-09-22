@@ -17,8 +17,9 @@ function json(body, status = 200) {
 
 export async function checkChoferRut(request, env) {
   try {
-    const limited = enforceDriverAuthRateLimit(
+    const limited = await enforceDriverAuthRateLimit(
       request,
+      env,
       DRIVER_AUTH_LIMITS.checkRut.endpoint,
       DRIVER_AUTH_LIMITS.checkRut.limit,
       DRIVER_AUTH_LIMITS.checkRut.windowMs

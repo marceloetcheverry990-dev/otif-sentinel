@@ -217,74 +217,6 @@ function getMetricUnit(metricName) {
 }
 
 // ============================================================================
-// MIDDLEWARE WRAPPER
-// ============================================================================
-
-/**
- * Middleware wrapper that automatically captures request metrics
- * 
- * Wraps an HTTP request handler to automatically measure and record
- * request duration, count, and error rate.
- * 
- * @param {Function} handler - Original request handler
- * @param {Object} config - Configuration { component: string }
- * @returns {Function} - Wrapped handler
- * 
- * @example
- * const wrappedHandler = withMetrics(originalHandler, { component: 'wms-webhook' });
- * export default { fetch: wrappedHandler };
- */
-export function withMetrics(handler, config = {}) {
-  return async function metricsWrapper(request, env, ctx) {
-    const timer = startTimer();
-    const url = new URL(request.url);
-    const endpoint = url.pathname;
-    let statusCode = 200;
-    let hadError = false;
-
-    try {
-      // Call original handler
-      const response = await handler(request, env, ctx);
-      statusCode = response.status;
-      hadError = statusCode >= 400;
-
-      return response;
-    } catch (error) {
-      statusCode = 500;
-      hadError = true;
-      throw error; // Re-throw to preserve error handling
-    } finally {
-      // Record metrics asynchronously
-      const duration = timer.stop();
-      const tags = {
-        endpoint,
-        status_code: statusCode,
-        method: request.method,
-        component: config.component || 'unknown'
-      };
-
-      // Use waitUntil to record metrics without blocking response
-      ctx.waitUntil((async () => {
-        try {
-          // Record duration
-          await recordMetric('http.request.duration', duration, tags, env);
-
-          // Record count
-          await recordMetric('http.request.count', 1, tags, env);
-
-          // Record error if applicable
-          if (hadError) {
-            await recordMetric('http.error.rate', 1, tags, env);
-          }
-        } catch (metricsError) {
-          console.error('[METRICS_WRAPPER_ERROR]', metricsError.message);
-        }
-      })());
-    }
-  };
-}
-
-// ============================================================================
 // METRIC TYPE CONSTANTS
 // ============================================================================
 
@@ -311,6 +243,5 @@ export const METRIC_TYPES = Object.freeze({
 export default {
   recordMetric,
   startTimer,
-  withMetrics,
   METRIC_TYPES
 };

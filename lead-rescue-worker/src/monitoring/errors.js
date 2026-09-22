@@ -45,23 +45,28 @@ export async function captureError(error, context = {}, dbClient = null) {
     const errorType = error?.name || 'UnknownError';
     const errorMessage = error?.message || String(error);
     const stackTrace = error?.stack || new Error().stack;
-    
+
     // Generate error fingerprint for aggregation (Requirement 3.5)
     const fingerprint = generateErrorFingerprint(error);
-    
+
     // Classify error severity (Requirement 3.4)
     const severity = classifyErrorSeverity(error);
-    
+
     // Sanitize error message to remove sensitive data (Requirement 10.2)
     const sanitizedMessage = sanitizeErrorMessage(errorMessage);
-    
+    // error.stack en V8 embebe el mensaje original sin sanitizar como su
+    // primera línea ("TypeError: <mensaje>\n    at ...") — si no se sanitiza
+    // también, cualquier dato sensible que se limpió de error_message
+    // sobrevive intacto un campo al lado, en stack_trace.
+    const sanitizedStackTrace = sanitizeErrorMessage(stackTrace);
+
     // Prepare error log entry
     const errorLog = {
       severity,
       error_type: errorType,
       error_message: sanitizedMessage,
       error_fingerprint: fingerprint,
-      stack_trace: stackTrace,
+      stack_trace: sanitizedStackTrace,
       trace_id: context.trace_id || null,
       tenant_id: context.tenant_id || null,
       endpoint: context.endpoint || null,
@@ -79,7 +84,7 @@ export async function captureError(error, context = {}, dbClient = null) {
         )
       }
     };
-    
+
     // Store error in database
     if (dbClient) {
       // Use provided client (synchronous within transaction)
@@ -525,13 +530,14 @@ export function captureErrorAsync(error, context, ctx, env) {
     const errorMessage = error?.message || String(error);
     const stackTrace = error?.stack || new Error().stack;
     const sanitizedMessage = sanitizeErrorMessage(errorMessage);
-    
+    const sanitizedStackTrace = sanitizeErrorMessage(stackTrace);
+
     const errorLog = {
       severity,
       error_type: errorType,
       error_message: sanitizedMessage,
       error_fingerprint: fingerprint,
-      stack_trace: stackTrace,
+      stack_trace: sanitizedStackTrace,
       trace_id: context.trace_id || null,
       tenant_id: context.tenant_id || null,
       endpoint: context.endpoint || null,

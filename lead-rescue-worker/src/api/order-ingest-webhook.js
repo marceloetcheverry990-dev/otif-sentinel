@@ -21,11 +21,13 @@ import { geocodeAddress } from '../helpers/geocode.js';
 import { isValidLatLng, parseCoord } from '../helpers/destino-coords.js';
 import { verifyMetaSignature } from '../utils.js';
 import { withMonitoring } from '../monitoring/middleware.js';
+import { isWmsEnabledForTenant, ensureWmsSchema, reservarOt } from '../helpers/wms-stock.js';
 
+// Estados que un reenvío del ERP puede sobrescribir. PICKING/PACKING NO van:
+// solo los pone el WMS, y resetearlos a PENDIENTE_RUTEO sacaba el pedido de
+// bodega a medio empacar (ruteable antes de tiempo, stock reservado huérfano).
 const PRE_ROUTE_STATES = [
   'PENDIENTE_RUTEO',
-  'PICKING',
-  'PACKING',
   'STAGING',
   'ATRASO',
 ];
@@ -41,7 +43,15 @@ function json(body, status = 200) {
 
 /**
  * Resuelve el secreto HMAC para un tenant.
- * Preferencia: ORDER_INGEST_SECRETS[tenant] → ORDER_INGEST_SECRET.
+ * Preferencia: ORDER_INGEST_SECRETS[tenant] → ORDER_INGEST_SECRET (solo con
+ * ORDER_INGEST_ALLOW_GLOBAL_SECRET=true).
+ *
+ * El fallback global es peligroso en multi-tenant: X-Tenant-Id lo manda el
+ * caller sin verificación de ownership, así que si dos tenants terminan
+ * validando su firma con el MISMO secreto, cualquiera que conozca ese
+ * secreto (el de su propio tenant) puede forjar una firma válida e
+ * inyectar órdenes bajo el tenant_id de otro con solo cambiar el header.
+ * Mismo patrón que DTE_ALLOW_GLOBAL_IDENTITY (ver resolve-dte-env.js).
  */
 export function resolveOrderIngestSecret(env, tenantId) {
   const tid = String(tenantId || '').trim();
@@ -58,7 +68,8 @@ export function resolveOrderIngestSecret(env, tenantId) {
     }
   }
 
-  if (env.ORDER_INGEST_SECRET && String(env.ORDER_INGEST_SECRET).length > 0) {
+  const allowGlobal = String(env.ORDER_INGEST_ALLOW_GLOBAL_SECRET || '').toLowerCase() === 'true';
+  if (allowGlobal && env.ORDER_INGEST_SECRET && String(env.ORDER_INGEST_SECRET).length > 0) {
     return String(env.ORDER_INGEST_SECRET);
   }
   return null;
@@ -143,6 +154,21 @@ async function prepareOrders(orders, source, env) {
 
     const tagsRequeridos = meta.tags_requeridos || [];
 
+    // Líneas de pedido (SKU+qty) para la reserva de bodega. Se mergean por SKU
+    // acá también: reservarOt ya lo hace, pero así el conteo que devolvemos y
+    // lo que se guarda en orden_lineas coinciden con lo que pidió el ERP.
+    const lineas = [];
+    if (Array.isArray(raw.lineas)) {
+      const porSku = new Map();
+      for (const l of raw.lineas) {
+        const sku = String(l?.sku || '').trim();
+        const qty = Number(l?.qty);
+        if (!sku || !Number.isFinite(qty) || qty <= 0) continue;
+        porSku.set(sku, (porSku.get(sku) || 0) + qty);
+      }
+      for (const [sku, qty] of porSku) lineas.push({ sku, qty });
+    }
+
     prepared.push({
       otId,
       cliente: String(raw.cliente).trim(),
@@ -154,11 +180,111 @@ async function prepareOrders(orders, source, env) {
       lat: isValidLatLng(lat, lng) ? lat : null,
       lng: isValidLatLng(lat, lng) ? lng : null,
       direccion: raw.direccion || null,
+      depotId: raw.depot_id ? String(raw.depot_id).trim() : null,
+      lineas,
     });
   }
 
   prepared.sort((a, b) => a.otId.localeCompare(b.otId));
   return { prepared, rejected };
+}
+
+/**
+ * Reserva stock para las órdenes recién ingresadas que traen líneas (SKU+qty).
+ * Corre dentro de la transacción de la ingesta, con un SAVEPOINT por orden:
+ * un fallo de bodega nunca debe tumbar el batch de pedidos ya insertado.
+ *
+ * Resultado por orden (lo decide reservarOt, que ya está testeado):
+ *   - alcanza el stock  → PENDIENTE_PICKING (entra a la cola de bodega)
+ *   - no alcanza        → QUIEBRE (queda fuera del ruteo hasta que haya stock)
+ *
+ * Sin WMS activo, o sin líneas en el payload, no toca nada: la orden sigue
+ * el camino de siempre (PENDIENTE_RUTEO directo).
+ */
+async function reservarStockDeIngesta(client, env, tenantId, prepared) {
+  const conLineas = prepared.filter((o) => o.lineas && o.lineas.length > 0);
+  if (conLineas.length === 0) return null;
+
+  if (!(await isWmsEnabledForTenant(client, env, tenantId))) return null;
+
+  // omitidas: ya reservadas antes, o en un estado que no se reserva (ruteada,
+  // en calle, entregada). Un reenvío del ERP / orders/updated de Shopify cae acá.
+  const stats = { reservadas: 0, quiebres: 0, omitidas: 0, errores: 0 };
+  try {
+    await ensureWmsSchema(client);
+  } catch (e) {
+    console.warn('[ORDER_INGEST_WMS] no se pudo asegurar el schema:', e.message);
+    return { ...stats, errores: conLineas.length };
+  }
+
+  // Idempotencia: si la OT ya tiene orden_lineas, ya pasó por una reserva
+  // exitosa (reservarOt solo las escribe cuando alcanza el stock). Tras el
+  // packing la OT vuelve a PENDIENTE_RUTEO, que es reservable — sin este
+  // chequeo un reenvío la reservaba de nuevo y descontaba el stock dos veces.
+  // Un QUIEBRE no tiene líneas, así que sí se reintenta (puede haber llegado stock).
+  const yaReservadas = new Set();
+  try {
+    const r = await client.query(
+      `SELECT DISTINCT ot_id FROM orden_lineas WHERE tenant_id = $1 AND ot_id = ANY($2::text[])`,
+      [tenantId, conLineas.map((o) => o.otId)]
+    );
+    for (const row of r.rows) yaReservadas.add(row.ot_id);
+  } catch (e) {
+    // Sin poder confirmar, no arriesgar una doble reserva.
+    console.warn('[ORDER_INGEST_WMS] no se pudo leer orden_lineas:', e.message);
+    return { ...stats, errores: conLineas.length };
+  }
+
+  // Bodega por defecto del tenant (si la orden no trae depot_id propio).
+  let depotPorDefecto = null;
+  try {
+    const d = await client.query(
+      `SELECT depot_id FROM depots
+       WHERE tenant_id = $1 AND activo = TRUE
+       ORDER BY is_default DESC LIMIT 1`,
+      [tenantId]
+    );
+    depotPorDefecto = d.rows[0]?.depot_id || null;
+  } catch (e) {
+    console.warn('[ORDER_INGEST_WMS] no se pudo resolver depot:', e.message);
+  }
+
+  for (const orden of conLineas) {
+    if (yaReservadas.has(orden.otId)) {
+      stats.omitidas += 1;
+      continue;
+    }
+    const depot_id = orden.depotId || depotPorDefecto;
+    if (!depot_id) {
+      stats.errores += 1;
+      continue;
+    }
+
+    // SAVEPOINT: en Postgres un query fallido aborta toda la transacción, así
+    // que sin esto un error de bodega en UNA orden perdería el batch entero.
+    await client.query('SAVEPOINT wms_reserva');
+    try {
+      const r = await reservarOt(client, {
+        tenant_id: tenantId,
+        ot_id: orden.otId,
+        depot_id,
+        lineas: orden.lineas,
+      });
+      await client.query('RELEASE SAVEPOINT wms_reserva');
+
+      if (r.ok && !r.already) stats.reservadas += 1;
+      else if (r.ok || r.code === 'estado_no_reservable') stats.omitidas += 1;
+      else if (r.code === 'quiebre') stats.quiebres += 1;
+      else stats.errores += 1;
+    } catch (e) {
+      await client.query('ROLLBACK TO SAVEPOINT wms_reserva');
+      await client.query('RELEASE SAVEPOINT wms_reserva');
+      stats.errores += 1;
+      console.warn('[ORDER_INGEST_WMS] reserva falló para', orden.otId, e.message);
+    }
+  }
+
+  return stats;
 }
 
 async function upsertOrders(env, tenantId, prepared) {
@@ -245,11 +371,10 @@ async function upsertOrders(env, tenantId, prepared) {
         SELECT nombre_cliente_raw, direccion_calle, lat, lng, $5::text
         FROM UNNEST($1::text[], $2::text[], $3::numeric[], $4::numeric[])
         AS t(nombre_cliente_raw, direccion_calle, lat, lng)
-        ON CONFLICT (nombre_cliente_raw) DO UPDATE SET
+        ON CONFLICT (tenant_id, nombre_cliente_raw) DO UPDATE SET
           direccion_calle = COALESCE(EXCLUDED.direccion_calle, clientes.direccion_calle),
           lat = COALESCE(EXCLUDED.lat, clientes.lat),
-          lng = COALESCE(EXCLUDED.lng, clientes.lng),
-          tenant_id = COALESCE(EXCLUDED.tenant_id, clientes.tenant_id)
+          lng = COALESCE(EXCLUDED.lng, clientes.lng)
         `,
         [
           clientesArr.map((c) => c.nombre),
@@ -262,9 +387,15 @@ async function upsertOrders(env, tenantId, prepared) {
       clientesCount = clientesArr.length;
     }
 
+    // Bodega: reservar stock de las órdenes que traen líneas (si el tenant
+    // tiene WMS activo). Va acá, después del upsert, porque reservarOt exige
+    // que la OT ya exista y esté en un estado reservable (PENDIENTE_RUTEO lo es).
+    const wms = await reservarStockDeIngesta(client, env, tenantId, prepared);
+
     return {
       upserted: resOrd.rowCount ?? prepared.length,
       clientes: clientesCount,
+      wms,
     };
   });
 }
@@ -381,7 +512,10 @@ export async function ingestCanonicalOrders(env, {
       clientes: result.clientes,
       rejected,
       idempotency_key,
-      mensaje: `${result.upserted} orden(es) en PENDIENTE_RUTEO. Asigná ruta desde Torre / optimizar.`,
+      ...(result.wms ? { wms: result.wms } : {}),
+      mensaje: result.wms
+        ? `${result.upserted} orden(es) ingresadas. Bodega: ${result.wms.reservadas} reservada(s) a picking, ${result.wms.quiebres} en quiebre, ${result.wms.omitidas} sin cambios (ya reservadas o fuera de bodega).`
+        : `${result.upserted} orden(es) en PENDIENTE_RUTEO. Asigná ruta desde Torre / optimizar.`,
       ...(extra || {}),
     }, 200);
   } catch (e) {
@@ -514,11 +648,10 @@ async function upsertOrdersWithoutLatLngColumns(env, tenantId, prepared) {
         SELECT nombre_cliente_raw, direccion_calle, lat, lng, $5::text
         FROM UNNEST($1::text[], $2::text[], $3::numeric[], $4::numeric[])
         AS t(nombre_cliente_raw, direccion_calle, lat, lng)
-        ON CONFLICT (nombre_cliente_raw) DO UPDATE SET
+        ON CONFLICT (tenant_id, nombre_cliente_raw) DO UPDATE SET
           direccion_calle = COALESCE(EXCLUDED.direccion_calle, clientes.direccion_calle),
           lat = COALESCE(EXCLUDED.lat, clientes.lat),
-          lng = COALESCE(EXCLUDED.lng, clientes.lng),
-          tenant_id = COALESCE(EXCLUDED.tenant_id, clientes.tenant_id)
+          lng = COALESCE(EXCLUDED.lng, clientes.lng)
         `,
         [
           clientesArr.map((c) => c.cliente),

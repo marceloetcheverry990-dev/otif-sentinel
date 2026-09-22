@@ -7,8 +7,25 @@ import {
 } from '../helpers/driver-auth.js';
 import {
   DRIVER_AUTH_LIMITS,
+  LOGIN_ACCOUNT_LIMIT,
   enforceDriverAuthRateLimit,
+  enforceAccountRateLimit,
 } from '../helpers/driver-auth-rate-limit.js';
+
+/** Mock mínimo de KVNamespace para tests — get/put en memoria, sin TTL real. */
+function makeMockKv() {
+  const store = new Map();
+  return {
+    async get(key, type) {
+      const raw = store.get(key);
+      if (raw === undefined) return null;
+      return type === 'json' ? JSON.parse(raw) : raw;
+    },
+    async put(key, value) {
+      store.set(key, value);
+    },
+  };
+}
 import { logoutChofer } from './app-chofer-logout.js';
 import { base64urlDecode } from '../helpers/hmac.js';
 
@@ -59,17 +76,57 @@ describe('driver auth hardening', () => {
     expect(body.code).toBe('token_revocado');
   });
 
-  it('enforceDriverAuthRateLimit bloquea tras superar el cupo de login', () => {
+  it('enforceDriverAuthRateLimit (por IP) bloquea tras superar el cupo de login', async () => {
     const req = new Request('https://example.com/api/choferes/login', {
       headers: { 'CF-Connecting-IP': '203.0.113.55' },
     });
     const { endpoint, limit, windowMs } = DRIVER_AUTH_LIMITS.login;
+    const env = { DRIVER_REVOKED_JTI: makeMockKv() };
 
     let blocked = null;
     for (let i = 0; i < limit + 1; i++) {
-      blocked = enforceDriverAuthRateLimit(req, endpoint, limit, windowMs);
+      blocked = await enforceDriverAuthRateLimit(req, env, endpoint, limit, windowMs);
     }
     expect(blocked).not.toBeNull();
     expect(blocked.status).toBe(429);
+  });
+
+  it('enforceDriverAuthRateLimit no comparte cupo entre isolates distintos (dos KV separados = dos cupos)', async () => {
+    // Regresión del bug real: el Map en memoria se reiniciaba por isolate.
+    // Acá simulamos eso a propósito (dos "isolates" = dos mocks de KV) para
+    // dejar registrado qué comportamiento NO queremos — con el KV real
+    // compartido, este escenario no puede pasar.
+    const req = new Request('https://example.com/api/choferes/login', {
+      headers: { 'CF-Connecting-IP': '203.0.113.55' },
+    });
+    const { endpoint, limit, windowMs } = DRIVER_AUTH_LIMITS.login;
+    const isolateA = { DRIVER_REVOKED_JTI: makeMockKv() };
+    const isolateB = { DRIVER_REVOKED_JTI: makeMockKv() };
+
+    for (let i = 0; i < limit; i++) {
+      await enforceDriverAuthRateLimit(req, isolateA, endpoint, limit, windowMs);
+    }
+    const stillAllowedOnB = await enforceDriverAuthRateLimit(req, isolateB, endpoint, limit, windowMs);
+    // Con KV separados (simulando el bug viejo) sí pasa — confirma que la
+    // protección real viene de COMPARTIR el KV, no de la lógica en sí.
+    expect(stillAllowedOnB).toBeNull();
+  });
+
+  it('enforceAccountRateLimit bloquea por (tenant_id, rut) sin importar la IP de origen', async () => {
+    const env = { DRIVER_REVOKED_JTI: makeMockKv() };
+    const { endpoint } = DRIVER_AUTH_LIMITS.login;
+    const { limit, windowMs } = LOGIN_ACCOUNT_LIMIT;
+
+    let blocked = null;
+    for (let i = 0; i < limit + 1; i++) {
+      // Cada intento "viene" de una IP distinta — no debería importar.
+      blocked = await enforceAccountRateLimit(env, endpoint, 'empresa_base', '11111111-1', limit, windowMs);
+    }
+    expect(blocked).not.toBeNull();
+    expect(blocked.status).toBe(429);
+
+    // Otra cuenta en el mismo tenant no está afectada.
+    const otherAccount = await enforceAccountRateLimit(env, endpoint, 'empresa_base', '22222222-2', limit, windowMs);
+    expect(otherAccount).toBeNull();
   });
 });

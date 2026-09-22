@@ -9,7 +9,11 @@ export const BACKGROUND_LOCATION_TASK = 'BACKGROUND_LOCATION_TASK';
 if (Platform.OS !== 'web') {
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
     if (error) {
+      // Antes solo console.error: si se revoca el permiso de ubicación en
+      // background, el chofer nunca se enteraba (nadie ve la consola en
+      // producción) y el tracking dejaba de mandar pings en silencio.
       console.error("Error en Background Location:", error.message);
+      useSyncStore.getState().setLocationError(error.message || 'Error de ubicación en segundo plano');
       return;
     }
 
@@ -19,6 +23,9 @@ if (Platform.OS !== 'web') {
 
       if (latestLocation) {
         console.log("GPS Track:", latestLocation.coords.latitude, latestLocation.coords.longitude);
+
+        // Task funcionando de nuevo: limpiar cualquier error previo.
+        useSyncStore.getState().setLocationError(null);
 
         // Solo enviar pings si hay un viaje activo: /api/gps/ping exige trip_id
         // asignado al chofer del token

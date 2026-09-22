@@ -164,6 +164,11 @@ export async function auditarFlotaEnVivo(env) {
            AND ch.rut = fv.rut_chofer_asignado
           WHERE fv.trip_id_actual IS NOT NULL
             AND fv.ultima_lat IS NOT NULL
+            -- VIDEO-02/VIDEO-03 son patentes fijas de demo/QA (ver
+            -- admin-qa.js adminQaSeedFleetGps/adminQaVideoPrep) sin chofer
+            -- moviéndose de verdad — sin este filtro generaban una alerta
+            -- SIGNAL_LOST nueva por cada corrida E2E/demo (miles acumuladas).
+            AND fv.patente NOT LIKE 'VIDEO-%'
         `);
       } catch (colErr) {
         if (!String(colErr.message || '').includes('last_significant_move_at')) throw colErr;

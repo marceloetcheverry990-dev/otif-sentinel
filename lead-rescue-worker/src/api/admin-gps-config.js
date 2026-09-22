@@ -4,6 +4,13 @@ import { CORS_HEADERS, requireTenantId } from '../config.js';
 export async function updateGPSInterval(request, env, operator = null) {
   if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
+  if (!operator?.is_admin) {
+    return new Response(JSON.stringify({ error: 'Requiere admin', code: 'admin_required' }), {
+      status: 403,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    });
+  }
+
   try {
     const body = await request.json();
     // Tenant siempre desde JWT de operador; no confiar en body.tenant_id

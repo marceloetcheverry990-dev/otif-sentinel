@@ -193,6 +193,31 @@ describe('handleOperatorLogin', () => {
     expect(res.headers.get('Set-Cookie')).toContain('HttpOnly');
   });
 
+  it('logout con sesión activa revoca el jti — el mismo token deja de ser válido después (antes solo borraba la cookie)', async () => {
+    const { signOperatorToken: realSign, verifyOperatorToken: realVerify } =
+      await vi.importActual('../helpers/operator-auth.js');
+    const token = await realSign({ role: 'operator', tenant_id: 'empresa_base' }, VALID_ENV);
+
+    const logoutReq = new Request('https://worker.test/api/operator/logout', {
+      method: 'POST',
+      headers: {
+        Origin: 'https://worker.test',
+        'Sec-Fetch-Site': 'same-origin',
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const res = await handleOperatorLogout(logoutReq, VALID_ENV);
+    expect(res.status).toBe(200);
+
+    const stillValid = await realVerify(
+      new Request('https://worker.test/control-tower', { headers: { Authorization: `Bearer ${token}` } }),
+      VALID_ENV
+    );
+    expect(stillValid.ok).toBe(false);
+    const body = await stillValid.response.json();
+    expect(body.code).toBe('token_revocado');
+  });
+
   // Verificar también el chequeo de method (405)
   it('GET a /api/operator/login: devuelve 405', async () => {
     const req = new Request('https://worker.test/api/operator/login', { method: 'GET' });

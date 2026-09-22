@@ -35,6 +35,8 @@ interface SyncState {
   queue: SyncAction[];
   isSyncing: boolean;
   currentTripId: string | null;
+  /** Mensaje de error del task de GPS en background (null = todo ok). No se persiste. */
+  locationError: string | null;
   setCurrentTrip: (tripId: string | null) => void;
   addAction: (endpoint: string, payload: any) => void;
   processQueue: () => Promise<void>;
@@ -42,6 +44,7 @@ interface SyncState {
   clearQueue: () => void;
   /** Reencola ítems failed (eventos operativos) para reintento manual. */
   retryFailed: () => void;
+  setLocationError: (message: string | null) => void;
 }
 
 function isChoferEvento(action: SyncAction): boolean {
@@ -64,8 +67,10 @@ export const useSyncStore = create<SyncState>()(
       queue: [],
       isSyncing: false,
       currentTripId: null,
+      locationError: null,
 
       setCurrentTrip: (tripId) => set({ currentTripId: tripId }),
+      setLocationError: (message) => set({ locationError: message }),
 
       addAction: (endpoint, payload) => {
         const { tenantId, rut } = useAuthStore.getState();

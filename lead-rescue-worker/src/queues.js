@@ -9,36 +9,45 @@ import { withQueueMonitoring } from './monitoring/queue-middleware.js';
 // Wrapped with monitoring middleware - Task 4.6
 export const processIngestionQueue = withQueueMonitoring(
   async function processIngestionQueueInternal(batch, env, ctx) {
-    const validOTs = batch.messages.map(m => m.body).filter(Boolean);
+    const validOTs = batch.messages.map(m => m.body).filter(b => b && b.ot_id && b.tenant_id);
     if (validOTs.length === 0) return batch.ackAll();
 
+    const key = (l) => `${l.tenant_id}:${l.ot_id}`;
+
     try {
+      const toSend = [];
       await withDbTransaction(env, async (client) => {
         await client.query("SET statement_timeout = 5000");
 
-        const insertedIds = new Set();
+        const insertedKeys = new Set();
         for (let i = 0; i < validOTs.length; i += CONFIG.BATCH_SIZE) {
           const chunk = validOTs.slice(i, i + CONFIG.BATCH_SIZE);
-          const values = chunk.map((l, idx) => `($${idx*4+1}, $${idx*4+2}, $${idx*4+3}::jsonb, $${idx*4+4})`).join(',');
-          const params = chunk.flatMap(l => [l.ot_id, l.created_at, JSON.stringify(l.data), l.t]);
-          
+          const values = chunk.map((l, idx) => `($${idx*5+1}, $${idx*5+2}, $${idx*5+3}, $${idx*5+4}::jsonb, $${idx*5+5})`).join(',');
+          const params = chunk.flatMap(l => [l.ot_id, l.tenant_id, l.created_at, JSON.stringify(l.data), l.t]);
+
           const res = await client.query(`
-            INSERT INTO transaction_logs (ot_id, created_at, metadata, trace_id)
+            INSERT INTO transaction_logs (ot_id, tenant_id, created_at, metadata, trace_id)
             VALUES ${values}
-            ON CONFLICT (ot_id) DO NOTHING
-            RETURNING ot_id
+            ON CONFLICT (tenant_id, ot_id) DO NOTHING
+            RETURNING ot_id, tenant_id
           `, params);
-          
-          res.rows.forEach(r => insertedIds.add(r.ot_id));
+
+          res.rows.forEach(r => insertedKeys.add(key({ ot_id: r.ot_id, tenant_id: r.tenant_id })));
         }
-        
+
+        // Ack/envío a la próxima cola recién después de que este bloque
+        // (y su commit) terminen exitosamente — ver catch más abajo.
         for (const msg of batch.messages) {
-          if (insertedIds.has(msg.body.ot_id)) {
-            await env.ENRICHMENT_QUEUE.send(msg.body, { contentType: 'json' });
+          if (msg.body?.ot_id && msg.body?.tenant_id && insertedKeys.has(key(msg.body))) {
+            toSend.push(msg.body);
           }
-          msg.ack();
         }
       });
+
+      for (const body of toSend) {
+        await env.ENRICHMENT_QUEUE.send(body, { contentType: 'json' });
+      }
+      batch.ackAll();
     } catch (err) {
       console.error("[INGESTION_FAIL]", err.message);
       return batch.retryAll();
@@ -60,8 +69,10 @@ export const processEnrichmentQueue = withQueueMonitoring(
 
     for (const msg of batch.messages) {
       let inTx = false;
-      const { ot_id: otId, data: otData, t: traceId, outboxId: originOutboxId } = msg.body;
-      
+      const { ot_id: otId, tenant_id: tenantId, data: otData, t: traceId, outboxId: originOutboxId } = msg.body || {};
+
+      if (!otId || !tenantId) { msg.ack(); continue; }
+
       try {
         if (circuitExpiresAt === null) {
           const circuitQuery = await client.query(`SELECT value, expires_at FROM system_flags WHERE key = 'openai_breaker'`);
@@ -70,97 +81,98 @@ export const processEnrichmentQueue = withQueueMonitoring(
           isCircuitActive = row.value === 'OPEN' && Date.now() < circuitExpiresAt;
         } else if (isCircuitActive && Date.now() > circuitExpiresAt) {
            await client.query(`UPDATE system_flags SET value = 'CLOSED', expires_at = NULL WHERE key = 'openai_breaker'`).catch(()=>{});
-           isCircuitActive = false; 
+           isCircuitActive = false;
         }
 
-        const metaCheck = originOutboxId ? await client.query(`SELECT retry_count FROM outbox_events WHERE id = $1`, [originOutboxId]) : null;
+        const metaCheck = originOutboxId ? await client.query(`SELECT retry_count FROM outbox_events WHERE id = $1 AND tenant_id = $2`, [originOutboxId, tenantId]) : null;
         const trueAttempts = metaCheck?.rows?.[0]?.retry_count || 0;
 
-        if (isCircuitActive) { 
-          if (originOutboxId) await client.query(`UPDATE outbox_events SET retry_count = retry_count + 1, last_error = 'OAI_CIRCUIT_OPEN' WHERE id = $1`, [originOutboxId]).catch(()=>{});
-          msg.retry({ delaySeconds: getExponentialBackoff(trueAttempts) }); 
-          continue; 
+        if (isCircuitActive) {
+          if (originOutboxId) await client.query(`UPDATE outbox_events SET retry_count = retry_count + 1, last_error = 'OAI_CIRCUIT_OPEN' WHERE id = $1 AND tenant_id = $2`, [originOutboxId, tenantId]).catch(()=>{});
+          msg.retry({ delaySeconds: getExponentialBackoff(trueAttempts) });
+          continue;
         }
 
         if (trueAttempts >= CONFIG.MAX_ENRICHMENT_ATTEMPTS) {
-          if (originOutboxId) await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1`, [originOutboxId]).catch(()=>{});
-          await client.query(`INSERT INTO dead_letter_events (ot_id, payload, reason, error_detail, trace_id, event_type) VALUES ($1, $2, 'MAX_RETRIES_ENRICH', 'Breaker/Timeout loop', $3, 'ENRICHMENT')`, [otId, JSON.stringify(msg.body), traceId]).catch(()=>{});
+          if (originOutboxId) await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1 AND tenant_id = $2`, [originOutboxId, tenantId]).catch(()=>{});
+          await client.query(`INSERT INTO dead_letter_events (ot_id, tenant_id, payload, reason, error_detail, trace_id, event_type) VALUES ($1, $2, $3, 'MAX_RETRIES_ENRICH', 'Breaker/Timeout loop', $4, 'ENRICHMENT')`, [otId, tenantId, JSON.stringify(msg.body), traceId]).catch(()=>{});
           msg.ack(); continue;
         }
-        
+
         const lock = await client.query(`
-          UPDATE transaction_logs 
+          UPDATE transaction_logs
           SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
             'enrichment_locked_until', (NOW() + INTERVAL '2 minutes'),
             'ai_attempts', COALESCE((metadata->>'ai_attempts')::int, 0) + 1
-          ) 
-          WHERE ot_id = $1 
+          )
+          WHERE ot_id = $1
+            AND tenant_id = $2
             AND processed_at IS NULL
             AND (
                  (metadata->>'enrichment_locked_until' IS NULL)
               OR ((metadata->>'enrichment_locked_until')::timestamp < NOW())
             )
           RETURNING ot_id
-        `, [otId]);
+        `, [otId, tenantId]);
 
         if (lock.rowCount === 0) {
-          msg.ack(); 
+          msg.ack();
           continue;
         }
-        
-        const aiAnalysis = await evaluateOTRiskWithOpenAI(otData, env, client);
-        
+
+        const aiAnalysis = await evaluateOTRiskWithOpenAI(otData, env, client, tenantId);
+
         await client.query('BEGIN');
         inTx = true;
-        const res = await client.query(`UPDATE transaction_logs SET processed_at = NOW(), metadata = (metadata - 'enrichment_locked_until') || jsonb_build_object('analysis', $1::jsonb) WHERE ot_id = $2 AND processed_at IS NULL RETURNING ot_id`, [JSON.stringify(aiAnalysis), otId]);
-        
+        const res = await client.query(`UPDATE transaction_logs SET processed_at = NOW(), metadata = (metadata - 'enrichment_locked_until') || jsonb_build_object('analysis', $1::jsonb) WHERE ot_id = $2 AND tenant_id = $3 AND processed_at IS NULL RETURNING ot_id`, [JSON.stringify(aiAnalysis), otId, tenantId]);
+
         if (res.rowCount > 0) {
-          if (originOutboxId) await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1`, [originOutboxId]);
-          const idempotencyKey = `${otId}:SEND_TO_DELIVERY`;
-          const outbox = await client.query(`INSERT INTO outbox_events (ot_id, event_type, idempotency_key, priority, payload) VALUES ($1, 'SEND_TO_DELIVERY', $2, 0, $3) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, [otId, idempotencyKey, JSON.stringify({ otId, t: traceId, aiAnalysis })]);
+          if (originOutboxId) await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1 AND tenant_id = $2`, [originOutboxId, tenantId]);
+          const idempotencyKey = `${tenantId}:${otId}:SEND_TO_DELIVERY`;
+          const outbox = await client.query(`INSERT INTO outbox_events (ot_id, tenant_id, event_type, idempotency_key, priority, payload) VALUES ($1, $2, 'SEND_TO_DELIVERY', $3, 0, $4) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, [otId, tenantId, idempotencyKey, JSON.stringify({ otId, tenantId, t: traceId, aiAnalysis })]);
           await recordEventTx(client, otId, traceId, 'ENRICHED', { riesgo: aiAnalysis.ia.riesgo, score: aiAnalysis.ia.risk_score });
-          
+
           if (outbox.rowCount > 0) {
-            await env.DELIVERY_QUEUE.send({ otId, t: traceId, outboxId: outbox.rows[0].id }, { contentType: 'json' });
+            await env.DELIVERY_QUEUE.send({ otId, tenantId, t: traceId, outboxId: outbox.rows[0].id }, { contentType: 'json' });
           }
           await client.query('COMMIT');
           inTx = false;
           msg.ack();
-        } else { 
-          await safeRollback(client); inTx = false; 
-          const check = await client.query(`SELECT processed_at FROM transaction_logs WHERE ot_id = $1`, [otId]);
-          if (check.rows[0]?.processed_at) { msg.ack(); } 
+        } else {
+          await safeRollback(client); inTx = false;
+          const check = await client.query(`SELECT processed_at FROM transaction_logs WHERE ot_id = $1 AND tenant_id = $2`, [otId, tenantId]);
+          if (check.rows[0]?.processed_at) { msg.ack(); }
           else { throw new Error("OT_NOT_FOUND_OR_RACE_CONDITION"); }
         }
-      } catch (innerErr) { 
+      } catch (innerErr) {
         if (inTx) await safeRollback(client);
         inTx = false;
-        
+
         const errorType = classifyError(innerErr, innerErr.message.startsWith('OPENAI_HTTP_') ? parseInt(innerErr.message.split('_')[2], 10) : null);
-        
+
         try {
-          await client.query(`UPDATE transaction_logs SET metadata = metadata - 'enrichment_locked_until' WHERE ot_id = $1`, [otId]).catch(()=>{});
-          
+          await client.query(`UPDATE transaction_logs SET metadata = metadata - 'enrichment_locked_until' WHERE ot_id = $1 AND tenant_id = $2`, [otId, tenantId]).catch(()=>{});
+
           if (errorType === 'RATE_LIMIT' || errorType === 'SERVER_ERROR') {
             await client.query(`
-              INSERT INTO system_flags (key, value, expires_at) 
+              INSERT INTO system_flags (key, value, expires_at)
               VALUES ('openai_breaker', 'OPEN', NOW() + INTERVAL '2 minutes')
-              ON CONFLICT (key) DO UPDATE 
+              ON CONFLICT (key) DO UPDATE
               SET value = 'OPEN', expires_at = GREATEST(system_flags.expires_at, NOW() + INTERVAL '2 minutes')
             `);
-            isCircuitActive = true; 
+            isCircuitActive = true;
             circuitExpiresAt = Date.now() + 120000;
           }
 
-          const metaCheckFail = originOutboxId ? await client.query(`SELECT retry_count FROM outbox_events WHERE id = $1`, [originOutboxId]) : null;
+          const metaCheckFail = originOutboxId ? await client.query(`SELECT retry_count FROM outbox_events WHERE id = $1 AND tenant_id = $2`, [originOutboxId, tenantId]) : null;
           const currentDbAttempts = metaCheckFail?.rows?.[0]?.retry_count || 0;
 
           if (originOutboxId) {
-             await client.query(`UPDATE outbox_events SET retry_count = retry_count + 1, last_error = $1 WHERE id = $2`, [innerErr.message, originOutboxId]).catch(()=>{});
+             await client.query(`UPDATE outbox_events SET retry_count = retry_count + 1, last_error = $1 WHERE id = $2 AND tenant_id = $3`, [innerErr.message, originOutboxId, tenantId]).catch(()=>{});
           }
-          msg.retry({ delaySeconds: getExponentialBackoff(currentDbAttempts) }); 
+          msg.retry({ delaySeconds: getExponentialBackoff(currentDbAttempts) });
         } catch (recoveryErr) {
-          msg.retry({ delaySeconds: 60 }); 
+          msg.retry({ delaySeconds: 60 });
         }
       }
     }
@@ -185,22 +197,22 @@ export const processDeliveryQueue = withQueueMonitoring(
 
     for (const msg of batch.messages) {
       let inTx = false;
-      const { otId, outboxId, t: traceId } = msg.body || {};
+      const { otId, tenantId, outboxId, t: traceId } = msg.body || {};
 
       try {
-        if (!otId || !outboxId) { msg.ack(); continue; }
+        if (!otId || !tenantId || !outboxId) { msg.ack(); continue; }
 
-        const metaCheck = await client.query(`SELECT retry_count FROM outbox_events WHERE id = $1`, [outboxId]);
+        const metaCheck = await client.query(`SELECT retry_count FROM outbox_events WHERE id = $1 AND tenant_id = $2`, [outboxId, tenantId]);
         const trueRetries = metaCheck.rows[0]?.retry_count || 0;
 
         if (trueRetries >= CONFIG.MAX_DELIVERY_ATTEMPTS) {
           try {
             await client.query(
-              `INSERT INTO dead_letter_events (ot_id, trace_id, event_type, payload, reason)
-               VALUES ($1, $2, 'DELIVERY', $3, 'MAX_RETRIES')`,
-              [otId, traceId, JSON.stringify(msg.body)]
+              `INSERT INTO dead_letter_events (ot_id, tenant_id, trace_id, event_type, payload, reason)
+               VALUES ($1, $2, $3, 'DELIVERY', $4, 'MAX_RETRIES')`,
+              [otId, tenantId, traceId, JSON.stringify(msg.body)]
             );
-            await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1`, [outboxId]);
+            await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1 AND tenant_id = $2`, [outboxId, tenantId]);
           } catch (_) { /* best-effort DLQ */ }
           msg.ack();
           continue;
@@ -210,8 +222,8 @@ export const processDeliveryQueue = withQueueMonitoring(
         inTx = true;
 
         const lockCheck = await client.query(
-          `SELECT delivered_at FROM transaction_logs WHERE ot_id = $1 FOR UPDATE SKIP LOCKED`,
-          [otId]
+          `SELECT delivered_at FROM transaction_logs WHERE ot_id = $1 AND tenant_id = $2 FOR UPDATE SKIP LOCKED`,
+          [otId, tenantId]
         );
         if (lockCheck.rowCount === 0) {
           await safeRollback(client);
@@ -221,7 +233,7 @@ export const processDeliveryQueue = withQueueMonitoring(
         }
 
         if (lockCheck.rows[0].delivered_at !== null) {
-          await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1`, [outboxId]).catch(() => {});
+          await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1 AND tenant_id = $2`, [outboxId, tenantId]).catch(() => {});
           await safeRollback(client);
           inTx = false;
           msg.ack();
@@ -238,13 +250,13 @@ export const processDeliveryQueue = withQueueMonitoring(
                  WHEN created_at IS NOT NULL THEN EXTRACT(EPOCH FROM (NOW() - created_at)) * 1000
                  ELSE NULL
                END
-           WHERE ot_id = $1 AND delivered_at IS NULL
+           WHERE ot_id = $1 AND tenant_id = $2 AND delivered_at IS NULL
            RETURNING ot_id`,
-          [otId]
+          [otId, tenantId]
         );
 
         if (finalUpdate.rowCount > 0) {
-          await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1`, [outboxId]);
+          await client.query(`UPDATE outbox_events SET processed_at = NOW() WHERE id = $1 AND tenant_id = $2`, [outboxId, tenantId]);
           await recordEventTx(client, otId, traceId, 'DELIVERED', { channel: 'internal' });
         }
 
@@ -255,12 +267,12 @@ export const processDeliveryQueue = withQueueMonitoring(
         if (inTx) await safeRollback(client);
         inTx = false;
         try {
-          const metaCheckFail = await client.query(`SELECT retry_count FROM outbox_events WHERE id = $1`, [outboxId]);
+          const metaCheckFail = await client.query(`SELECT retry_count FROM outbox_events WHERE id = $1 AND tenant_id = $2`, [outboxId, tenantId]);
           const currentDbAttempts = metaCheckFail.rows[0]?.retry_count || 0;
           if (outboxId) {
             await client.query(
-              `UPDATE outbox_events SET retry_count = retry_count + 1, last_error = $1 WHERE id = $2`,
-              [e.message, outboxId]
+              `UPDATE outbox_events SET retry_count = retry_count + 1, last_error = $1 WHERE id = $2 AND tenant_id = $3`,
+              [e.message, outboxId, tenantId]
             );
           }
           msg.retry({ delaySeconds: getExponentialBackoff(currentDbAttempts) });

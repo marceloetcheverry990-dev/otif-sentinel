@@ -161,7 +161,10 @@ export async function lookupGuiaByReferencia(payload, env) {
   if (!token || !lookupPath) return null;
 
   const base = String(env.SIMPLEAPI_BASE_URL || 'https://api.simpleapi.cl').replace(/\/$/, '');
-  const ref = `${payload.tenant_id}:${payload.ot_id}`;
+  // Debe coincidir EXACTO con la referenciaExterna armada al emitir (línea ~58
+  // de este archivo) — si difiere, esta consulta nunca encuentra la guía ya
+  // emitida y el caller reemite un DTE real duplicado en el reintento.
+  const ref = `${payload.tenant_id}:${payload.ot_id}:${payload.trip_id}`;
   const path = lookupPath.startsWith('/') ? lookupPath : `/${lookupPath}`;
   const url = `${base}${path}?referenciaExterna=${encodeURIComponent(ref)}`;
 

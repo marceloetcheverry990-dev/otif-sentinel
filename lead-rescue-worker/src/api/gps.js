@@ -345,14 +345,51 @@ export async function getLiveFleet(request, env, _ctx = null, operator = null) {
   try {
     return await withDb(env, async (client) => {
       const { rows } = await client.query(
-        `SELECT trip_id_actual as trip_id, ultima_lat as lat, ultima_lng as lng,
-                NULL::numeric as velocidad
-         FROM flota_vehiculos 
+        `SELECT trip_id_actual as trip_id, ultima_lat as lat, ultima_lng as lng
+         FROM flota_vehiculos
          WHERE tenant_id = $1 AND trip_id_actual IS NOT NULL AND ultima_lat IS NOT NULL`,
         [tenant_id]
       );
 
-      const body = JSON.stringify({ exito: true, flota: rows });
+      // Velocidad real desde los últimos 2 puntos de gps_trail (delta_km / Δt) —
+      // antes el SELECT devolvía NULL::numeric hardcodeado, el popup del mapa
+      // siempre mostraba "null km/h". Si gps_trail no existe o el viaje tiene
+      // menos de 2 puntos muestreados, se degrada a null (mismo comportamiento
+      // de antes), no rompe el endpoint.
+      const velocidadByTrip = new Map();
+      if (rows.length) {
+        try {
+          const { rows: velRows } = await client.query(
+            `SELECT DISTINCT ON (trip_id) trip_id, delta_km, gap_seconds
+             FROM (
+               SELECT trip_id, delta_km, recorded_at,
+                      EXTRACT(EPOCH FROM (
+                        recorded_at - LAG(recorded_at) OVER (PARTITION BY trip_id ORDER BY recorded_at)
+                      )) AS gap_seconds
+               FROM gps_trail
+               WHERE tenant_id = $1
+             ) t
+             ORDER BY trip_id, recorded_at DESC`,
+            [tenant_id]
+          );
+          for (const r of velRows) {
+            const gapHoras = Number(r.gap_seconds) / 3600;
+            const km = Number(r.delta_km);
+            if (Number.isFinite(gapHoras) && gapHoras > 0 && Number.isFinite(km)) {
+              velocidadByTrip.set(String(r.trip_id), Math.round((km / gapHoras) * 10) / 10);
+            }
+          }
+        } catch (velErr) {
+          if (velErr?.code !== '42P01') console.warn('[GPS_LIVE_VELOCIDAD]', velErr.message);
+        }
+      }
+
+      const flota = rows.map((r) => ({
+        ...r,
+        velocidad: velocidadByTrip.get(String(r.trip_id)) ?? null,
+      }));
+
+      const body = JSON.stringify({ exito: true, flota });
       setLiveFleetCacheEntry(cacheKey, body);
       return new Response(body, {
         status: 200,

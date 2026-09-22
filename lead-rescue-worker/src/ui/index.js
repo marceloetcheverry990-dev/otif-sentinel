@@ -24,6 +24,7 @@ import { TELEMETRY_CHAT_SCRIPT } from './client/telemetriaYChat.js';
 import { MAPA_FLOTA_SCRIPT } from './client/mapaYFlota.js';
 import { POLLING_EVENTOS_SCRIPT } from './client/pollingYEventos.js';
 import { RUTA_RAPIDA_SCRIPT } from './client/rutaRapida.js';
+import { BODEGA_SCRIPT } from './client/bodega.js';
 
 export function renderControlTowerDashboard(
   ordenes,
@@ -81,6 +82,7 @@ export function renderControlTowerDashboard(
     operator: operatorSession || null,
     depots: depotsSeguros,
     dte_live: !!(depotOpts && depotOpts.dte_live),
+    wms_enabled: !!(depotOpts && depotOpts.wms_enabled),
   };
   const { safeOrdenesJson, safeViajesJson, safeConfigJson, rawChoferesJson } =
     buildJsonBlobs(ordenesSeguras, viajesSeguros, runtimeConfig, listaChoferes, lastSyncDate);
@@ -163,6 +165,7 @@ ${bodyHtml}
         ${MAPA_FLOTA_SCRIPT.replace(/\r\n/g, '\n')}
         ${POLLING_EVENTOS_SCRIPT.replace(/\r\n/g, '\n')}
         ${RUTA_RAPIDA_SCRIPT.replace(/\r\n/g, '\n')}
+        ${BODEGA_SCRIPT.replace(/\r\n/g, '\n')}
       </script>
 
       ${MODAL_RUTA_RAPIDA.trim()}

@@ -387,6 +387,30 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
         .backlog-item { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warning); border-radius: 6px; padding: 1rem; margin-bottom: 0.75rem; }
         .backlog-item.has-coords { cursor: pointer; }
         .backlog-item.has-coords:hover { border-color: var(--border-focus); }
+
+        /* BODEGA WMS-LITE */
+        .bodega-wrap { display: flex; flex-direction: column; gap: 0.9rem; }
+        .bodega-counts { font-size: 0.8rem; color: var(--text-muted); font-weight: 700; }
+        .bodega-h { font-size: 0.9rem; font-weight: 800; color: var(--text-main); margin-top: 0.2rem; }
+        .bodega-alert { padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 0.8rem; }
+        .bodega-alert ul { margin: 0.45rem 0 0 1rem; }
+        .bodega-alert-warn { border-color: #7c2d12; background: #451a03; color: #fdba74; }
+        .bodega-alert-danger { border-color: #7f1d1d; background: #450a0a; color: #fca5a5; }
+        .bodega-alert-ok { border-color: #065f46; background: #064e3b; color: #6ee7b7; }
+        .bodega-form { display: grid; grid-template-columns: 1.1fr 1fr 1.5fr 1fr 1fr 1fr auto; gap: 0.45rem; }
+        .bodega-form input, .bodega-form select {
+          padding: 0.45rem 0.55rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main);
+        }
+        .bodega-ot {
+          display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+          background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem;
+        }
+        .bodega-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+        .bodega-table th, .bodega-table td { padding: 0.5rem; border-bottom: 1px solid var(--border); text-align: left; }
+        .bodega-row-warn { background: rgba(245, 158, 11, 0.12); }
+        .btn-bodega { padding: 0.45rem 0.7rem; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; cursor: pointer; font-weight: 700; }
+        .btn-bodega-ok { background: #065f46; border-color: #047857; color: #d1fae5; }
+        .bodega-muted { color: var(--text-muted); font-size: 0.8rem; }
         
         /* MAP AREA */
         .map-container { flex: 1; position: relative; background: #e2e8f0; }
@@ -588,21 +612,22 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           <div class="global-kpis">
             <div class="kpi-box" style="border-top-color: var(--primary);">
               <div class="kpi-title">Monto en Calle</div>
-              <div class="kpi-val" style="color: var(--primary);">$1.575.000</div>
+              <div class="kpi-val" id="kpiMontoCalle" style="color: var(--primary);">$1.250.000</div>
             </div>
             <div class="kpi-box" style="border-top-color: var(--danger);">
               <div class="kpi-title" title="10% del monto de paradas abiertas cuyo ETA ya supera el SLA. No es multa histórica.">Riesgo SLA abierto</div>
-              <div class="kpi-val" style="color: var(--danger);">$50.000</div>
+              <div class="kpi-val" id="kpiRiesgoSla" style="color: var(--danger);">$50.000</div>
             </div>
             <div class="kpi-box" style="border-top-color: var(--success);">
               <div class="kpi-title" title="Paradas en viaje sin quiebre de SLA / total de paradas abiertas. El OTIF cerrado está en Dashboards.">OTIF proyectado</div>
-              <div class="kpi-val" style="color: var(--success);">100%</div>
+              <div class="kpi-val" id="kpiOtifProyectado" style="color: var(--success);">75%</div>
             </div>
           </div>
 
           <div class="tabs-header" role="tablist">
             <button class="tab-btn active" role="tab" aria-selected="true" data-target="panel-flota">🚚 Flota (3)</button>
             <button class="tab-btn" role="tab" aria-selected="false" data-target="panel-backlog">📋 Pedidos Pendientes (2)</button>
+            
           </div>
 
           <div id="search-container" style="padding: 1rem 1rem 0 1rem;">
@@ -640,7 +665,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                       </select>
                       
                       
-                        <select class="gps-interval-select" data-rut="undefined" style="width: 90px; font-size: 0.75rem; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); cursor: pointer;" title="Frecuencia GPS de la App">
+                        <select class="gps-interval-select" data-rut="" style="width: 90px; font-size: 0.75rem; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); cursor: pointer;" title="Frecuencia GPS de la App">
                           <option value="10" selected>⚡ 10s</option>
                           <option value="30" >🚗 30s</option>
                           <option value="60" >📱 1m</option>
@@ -668,12 +693,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                             <div style="font-size: 0.7rem; color: var(--text-muted); display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
                                <span>OT-1001 • $500.000</span>
                                <button disabled class="btn-doc">Documento Pendiente</button>
+                               
+                               
                             </div>
                           </div>
                           <div style="text-align: right; margin-left: auto;">
                             <div class="badge b-orange" style="font-size:0.6rem; margin-bottom: 2px;"> EN_RUTA</div>
+                              
                               <div style="font-size: 0.65rem; font-weight: 800; color: var(--danger);">
-                              ⏳ ETA: 12:00
+                              ⏳ ETA: 12:00 · SLA: 09:00
                             </div>
                           </div>
                         </div>
@@ -688,12 +716,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                             <div style="font-size: 0.7rem; color: var(--text-muted); display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
                                <span>OT-1002 • $300.000</span>
                                <button disabled class="btn-doc">Documento Pendiente</button>
+                               
+                               
                             </div>
                           </div>
                           <div style="text-align: right; margin-left: auto;">
                             <div class="badge b-orange" style="font-size:0.6rem; margin-bottom: 2px;"> CAMION_ASIGNADO</div>
+                              
                               <div style="font-size: 0.65rem; font-weight: 500; color: var(--text-muted);">
-                              ⏳ ETA: 10:00
+                              ⏳ ETA: 10:00 · SLA: 14:00
                             </div>
                           </div>
                         </div>
@@ -730,7 +761,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                       </select>
                       
                       
-                        <select class="gps-interval-select" data-rut="undefined" style="width: 90px; font-size: 0.75rem; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); cursor: pointer;" title="Frecuencia GPS de la App">
+                        <select class="gps-interval-select" data-rut="" style="width: 90px; font-size: 0.75rem; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); cursor: pointer;" title="Frecuencia GPS de la App">
                           <option value="10" >⚡ 10s</option>
                           <option value="30" selected>🚗 30s</option>
                           <option value="60" >📱 1m</option>
@@ -758,12 +789,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                             <div style="font-size: 0.7rem; color: var(--text-muted); display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
                                <span>OT-2001 • $200.000</span>
                                <button disabled class="btn-doc">Documento Pendiente</button>
+                               
+                               
                             </div>
                           </div>
                           <div style="text-align: right; margin-left: auto;">
                             <div class="badge b-orange" style="font-size:0.6rem; margin-bottom: 2px;"> EN_RUTA</div>
+                              
                               <div style="font-size: 0.65rem; font-weight: 500; color: var(--text-muted);">
-                              ⏳ ETA: 10:00
+                              ⏳ ETA: 10:00 · SLA: 14:00
                             </div>
                           </div>
                         </div>
@@ -778,10 +812,13 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                             <div style="font-size: 0.7rem; color: var(--text-muted); display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
                                <span>OT-2002 • $150.000</span>
                                <button disabled class="btn-doc">Documento Pendiente</button>
+                               
+                               
                             </div>
                           </div>
                           <div style="text-align: right; margin-left: auto;">
                             <div class="badge b-green" style="font-size:0.6rem; margin-bottom: 2px;"> ENTREGADO</div>
+                              
                               <div style="font-size: 0.65rem; font-weight: 500; color: var(--text-muted);">
                               <span style="color: var(--success);">✅ Real: 08:30</span><div style="font-size:0.6rem; margin-top:2px; color:#10b981; font-weight:700;">⚡ 210m antes (ETA: 12:00)</div>
                             </div>
@@ -841,12 +878,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                             <div style="font-size: 0.7rem; color: var(--text-muted); display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
                                <span>OT-&#96;&#36;{xss}&#96; • $250.000</span>
                                <button disabled class="btn-doc">Documento Pendiente</button>
+                               
+                               
                             </div>
                           </div>
                           <div style="text-align: right; margin-left: auto;">
                             <div class="badge b-orange" style="font-size:0.6rem; margin-bottom: 2px;"> EN_RUTA</div>
+                              
                               <div style="font-size: 0.65rem; font-weight: 500; color: var(--text-muted);">
-                              ⏳ ETA: 10:00
+                              ⏳ ETA: 10:00 · SLA: 14:00
                             </div>
                           </div>
                         </div>
@@ -886,6 +926,8 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 </div>
                 
             </div>
+
+            
           </div>
         </aside>
 
@@ -916,7 +958,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <script id="ordenes-json" type="application/json">[{"ot_id":"OT-PEND-001","cliente":"Cliente Pendiente A","tenant_id":"empresa_demo","trip_id":"","estado_operacional":"PENDIENTE_RUTEO","monto_total":180000,"direccion":"Av. Las Condes 1234, Santiago","lat":-33.41,"lng":-70.55},{"ot_id":"OT-PEND-002","cliente":"Cliente Pendiente B","tenant_id":"empresa_demo","trip_id":null,"estado_operacional":"PENDIENTE_RUTEO","monto_total":95000,"direccion":"Calle Tocopilla 567, Providencia, Santiago","lat":-33.43,"lng":-70.61}]</script>
       <script id="viajes-json" type="application/json">[{"trip_id":"VIAJE-001","chofer":"Juan Pérez","chofer_id":"CHF-01","detalle_paradas":[{"ot_id":"OT-1001","cliente":"Empresa Alpha","monto_total":500000,"estado_operacional":"EN_RUTA","eta":"2025-07-01T16:00:00.000Z","fecha_hora_sla":"2025-07-01T13:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"09:00","_hora_real_str":"--:--","_eta_str":"12:00","_search_str":"ot-1001 empresa alpha"},{"ot_id":"OT-1002","cliente":"Empresa Beta","monto_total":300000,"estado_operacional":"CAMION_ASIGNADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"--:--","_eta_str":"10:00","_search_str":"ot-1002 empresa beta"}],"_multa_calculada":50000,"_riesgo_dinamico":1,"_search_str":"viaje-001 juan pérez ot-1001 empresa alpha ot-1002 empresa beta"},{"trip_id":"VIAJE-002","chofer":"María González","chofer_id":"CHF-02","detalle_paradas":[{"ot_id":"OT-2001","cliente":"Empresa Gamma","monto_total":200000,"estado_operacional":"EN_RUTA","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"--:--","_eta_str":"10:00","_search_str":"ot-2001 empresa gamma"},{"ot_id":"OT-2002","cliente":"Empresa Delta","monto_total":150000,"estado_operacional":"ENTREGADO","eta":"2025-07-01T16:00:00.000Z","fecha_hora_sla":"2025-07-01T13:00:00.000Z","hora_real":"2025-07-01T12:30:00.000Z","metadata":null,"_fecha_sla_str":"09:00","_hora_real_str":"08:30","_eta_str":"12:00","_search_str":"ot-2002 empresa delta"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-002 maría gonzález ot-2001 empresa gamma ot-2002 empresa delta"},{"trip_id":"VIAJE-003","chofer":"Pedro Soto","chofer_id":"CHF-03","detalle_paradas":[{"ot_id":"OT-3001","cliente":"Empresa Epsilon","monto_total":100000,"estado_operacional":"ENTREGADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":"2025-07-01T10:00:00.000Z","metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"06:00","_eta_str":"10:00","_search_str":"ot-3001 empresa epsilon"},{"ot_id":"OT-3002","cliente":"Empresa Zeta","monto_total":75000,"estado_operacional":"RECHAZADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":"2025-07-01T11:00:00.000Z","metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"07:00","_eta_str":"10:00","_search_str":"ot-3002 empresa zeta"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-003 pedro soto ot-3001 empresa epsilon ot-3002 empresa zeta"},{"trip_id":"VIAJE-004","chofer":"Ana \`Backtick\` Ruiz","chofer_id":"CHF-04","detalle_paradas":[{"ot_id":"OT-\`\${xss}\`","cliente":"Empresa \`\${alert(1)}\` Corp","monto_total":250000,"estado_operacional":"EN_RUTA","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"--:--","_eta_str":"10:00","_search_str":"ot-\`\${xss}\` empresa \`\${alert(1)}\` corp"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-004 ana \`backtick\` ruiz ot-\`\${xss}\` empresa \`\${alert(1)}\` corp"}]</script>
-      <script id="config-json" type="application/json">{"BODEGA":{"LAT":-33.5132,"LNG":-70.7672,"NOMBRE":"Bodega Central"},"ESTADOS":{"PENDIENTE":"PENDIENTE_RUTEO","ASIGNADO":"CAMION_ASIGNADO","EN_RUTA":"EN_RUTA","ENTREGADO":"ENTREGADO","RECHAZADO":"RECHAZADO","CANCELADO":"CANCELADO_PLANILLA","RETORNO":"RETORNO_BODEGA"},"UI":{"COLORS":{"EXITO":"#10b981","ALERTA":"#ef4444","NEUTRAL":"#2563eb","WARNING":"#f59e0b"}},"tenant_id":"empresa_demo","operator":null,"depots":[],"dte_live":false,"last_sync_date":"2025-07-01T14:00:00.000Z"}</script>
+      <script id="config-json" type="application/json">{"BODEGA":{"LAT":-33.5132,"LNG":-70.7672,"NOMBRE":"Bodega Central"},"ESTADOS":{"PENDIENTE":"PENDIENTE_RUTEO","ASIGNADO":"CAMION_ASIGNADO","EN_RUTA":"EN_RUTA","ENTREGADO":"ENTREGADO","RECHAZADO":"RECHAZADO","CANCELADO":"CANCELADO_PLANILLA","RETORNO":"RETORNO_BODEGA"},"UI":{"COLORS":{"EXITO":"#10b981","ALERTA":"#ef4444","NEUTRAL":"#2563eb","WARNING":"#f59e0b"}},"WMS":{"ENABLED":false},"tenant_id":"empresa_demo","operator":null,"depots":[],"dte_live":false,"wms_enabled":false,"last_sync_date":"2025-07-01T14:00:00.000Z"}</script>
       <script id="choferes-json" type="application/json">[{"chofer_id":"CHF-01","nombre_completo":"Juan Pérez Morales","rut":"","gps_interval_seconds":10},{"chofer_id":"CHF-02","nombre_completo":"María González López","rut":"","gps_interval_seconds":30}]</script>
 
         <div id="chatOffcanvas" class="chat-panel">
@@ -1782,6 +1824,185 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
         };
 
+        window.verGuiaElectronica = async function(otId, tripId) {
+          if (!otId && !tripId) return;
+          var modal = document.getElementById('modalGuiaElectronica');
+          if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'modalGuiaElectronica';
+            modal.style.cssText = 'display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);align-items:center;justify-content:center;padding:1rem;overflow:auto;';
+            modal.innerHTML =
+              '<div id="guiaComprobanteSheet" style="background:#fff;color:#0f172a;border-radius:10px;max-width:640px;width:100%;padding:1.35rem 1.5rem;box-shadow:0 24px 60px rgba(0,0,0,0.45);font-family:Georgia,serif;">' +
+                '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:0.85rem;border-bottom:2px solid #0f172a;padding-bottom:0.65rem;">' +
+                  '<div>' +
+                    '<div style="font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;font-family:system-ui,sans-serif;">SII · DTE Tipo 52</div>' +
+                    '<h3 style="margin:2px 0 0;font-size:1.15rem;color:#0f172a;">Guía de Despacho Electrónica</h3>' +
+                    '<div style="font-size:0.72rem;color:#475569;font-family:system-ui,sans-serif;margin-top:2px;">Res. Ex. SII N°154/2025 · obligatoria desde 1 nov 2026</div>' +
+                  '</div>' +
+                  '<div style="display:flex;gap:6px;font-family:system-ui,sans-serif;">' +
+                    '<button type="button" id="btnImprimirGuiaModal" style="background:#0f172a;border:none;color:#fff;font-size:0.75rem;padding:6px 10px;border-radius:6px;cursor:pointer;">Imprimir</button>' +
+                    '<button type="button" id="btnCerrarGuiaModal" style="background:transparent;border:1px solid #cbd5e1;color:#334155;font-size:0.75rem;padding:6px 10px;border-radius:6px;cursor:pointer;">Cerrar</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div id="guiaModalBody" style="font-size:0.82rem;line-height:1.45;color:#1e293b;font-family:system-ui,sans-serif;">Cargando…</div>' +
+              '</div>';
+            document.body.appendChild(modal);
+            if (!document.getElementById('guiaPrintStyles')) {
+              var style = document.createElement('style');
+              style.id = 'guiaPrintStyles';
+              style.textContent = '@media print{body>*{visibility:hidden!important;}#modalGuiaElectronica,#modalGuiaElectronica *{visibility:visible!important;}#modalGuiaElectronica{position:static!important;inset:auto!important;background:#fff!important;display:block!important;padding:0!important;}#guiaComprobanteSheet{box-shadow:none!important;max-width:100%!important;}#btnImprimirGuiaModal,#btnCerrarGuiaModal{display:none!important;}}';
+              document.head.appendChild(style);
+            }
+            modal.addEventListener('click', function(e) {
+              if (e.target === modal) modal.style.display = 'none';
+            });
+            document.getElementById('btnCerrarGuiaModal').onclick = function() {
+              modal.style.display = 'none';
+            };
+            document.getElementById('btnImprimirGuiaModal').onclick = function() {
+              window.print();
+            };
+          }
+          var body = document.getElementById('guiaModalBody');
+          body.textContent = 'Cargando…';
+          modal.style.display = 'flex';
+          try {
+            var qs = otId
+              ? ('ot_id=' + encodeURIComponent(otId))
+              : ('trip_id=' + encodeURIComponent(tripId));
+            var res = await fetch('/api/guias-despacho?' + qs, { credentials: 'same-origin' });
+            var data = await res.json().catch(function() { return {}; });
+            if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+            var guias = Array.isArray(data.guias) ? data.guias : [];
+            var g = otId
+              ? (guias.find(function(x) { return String(x.ot_id) === String(otId); }) || guias[0])
+              : guias[0];
+            if (!g) {
+              body.innerHTML = '<p style="margin:0;color:#b45309;">Aún no hay guía registrada para esta parada.</p>';
+              return;
+            }
+            var c = g.comprobante || {};
+            var t = c.transporte || {};
+            var em = c.emisor || data.emisor || {};
+            var rec = c.receptor || {};
+            var det = (c.detalle && c.detalle[0]) || {};
+            var esc = function(v) {
+              return String(v == null || v === '' ? '—' : v).replace(/</g, '&lt;');
+            };
+            var money = function(v) {
+              if (v == null || v === '' || isNaN(Number(v))) return '—';
+              return '$' + Number(v).toLocaleString('es-CL');
+            };
+            var fechaFull = function(iso) {
+              if (!iso) return '—';
+              try {
+                return new Date(iso).toLocaleString('es-CL', {
+                  timeZone: 'America/Santiago',
+                  year: 'numeric', month: '2-digit', day: '2-digit',
+                  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                });
+              } catch (e) { return String(iso); }
+            };
+            var row = function(label, val) {
+              return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid #e2e8f0;">' +
+                '<span style="color:#64748b;font-weight:600;min-width:38%;">' + label + '</span>' +
+                '<span style="text-align:right;color:#0f172a;word-break:break-word;">' + esc(val) + '</span></div>';
+            };
+            var section = function(title, html) {
+              return '<div style="margin-top:0.85rem;"><div style="font-size:0.68rem;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#334155;margin-bottom:4px;">' +
+                title + '</div>' + html + '</div>';
+            };
+            var banner = c.listo_para_fiscalizacion
+              ? '<div style="background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">✓ Comprobante DTE 52 completo con folio SII — listo para fiscalización.</div>'
+              : (c.comprobante_completo
+                ? '<div style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">Comprobante Res.154 completo (tipo 52). Falta folio SII timbrado: conectar SimpleAPI/Lioren para validez ante fiscalización.</div>'
+                : '<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">Incompleto: ' +
+                  esc((c.faltantes_res154 || []).join(', ') || c.aviso_fiscalizacion || 'revisar campos') + '</div>');
+            body.innerHTML = banner +
+              section('Identificación DTE',
+                row('Tipo DTE', (c.tipo_dte || 52) + ' — ' + (c.tipo_dte_glosa || 'Guía de Despacho Electrónica')) +
+                row('Estado', c.estado || g.estado || '—') +
+                row('Folio', c.folio || (String(c.estado || g.estado || '').toUpperCase() === 'STUB' ? 'Pendiente timbraje SII (staging stub)' : '—')) +
+                row('Track ID', c.track_id || '—') +
+                row('Referencia', c.referencia_externa || '—') +
+                row('Ambiente', c.ambiente || '—') +
+                row('Proveedor', c.proveedor || g.proveedor || '—')
+              ) +
+              section('Emisor',
+                row('RUT', em.rut || '—') +
+                row('Razón social', em.razon_social || '—')
+              ) +
+              section('Receptor',
+                row('RUT', rec.rut || '—') +
+                row('Razón social', rec.razon_social || '—')
+              ) +
+              section('Transporte / traslado',
+                row('IndTraslado', (c.ind_traslado != null ? c.ind_traslado : '—') + ' — ' + (c.ind_traslado_glosa || c.tipo_traslado || '')) +
+                row('Tipo despacho', (c.tipo_despacho != null ? c.tipo_despacho : '—') + ' — ' + (c.tipo_despacho_glosa || '')) +
+                row('Patente', t.patente || '—') +
+                row('Conductor', (t.conductor_nombre || '—') + (t.conductor_rut ? (' · ' + t.conductor_rut) : '')) +
+                row('Origen', t.origen_direccion
+                  ? (String(t.origen_direccion).indexOf(',') >= 0 || !t.origen_comuna
+                    ? t.origen_direccion
+                    : (t.origen_direccion + ', ' + t.origen_comuna))
+                  : (t.origen_comuna || '—')) +
+                row('Destino', t.destino_direccion
+                  ? (String(t.destino_direccion).indexOf(',') >= 0 || !t.destino_comuna
+                    ? t.destino_direccion
+                    : (t.destino_direccion + ', ' + t.destino_comuna))
+                  : (t.destino_comuna || '—')) +
+                row('Emisión (inicio traslado)', fechaFull(c.fecha_emision || g.fecha_emision)) +
+                row('Fecha estimada entrega', fechaFull(c.fecha_estimada_entrega || g.fecha_estimada_entrega))
+              ) +
+              section('Detalle de bienes',
+                row('Ítem / OT', det.nombre || det.ot_id || g.ot_id || '—') +
+                row('Viaje', det.trip_id || g.trip_id || '—') +
+                row('Cantidad', det.cantidad != null ? (det.cantidad + ' ' + (det.unidad || 'UN')) : '—') +
+                row('Valor', money(det.precio)) +
+                row('Peso (kg)', det.peso_kg != null ? det.peso_kg : '—') +
+                row('Volumen', det.volumen != null ? det.volumen : '—')
+              ) +
+              (g.error || c.error
+                ? '<p style="margin:10px 0 0;color:#b91c1c;font-size:0.75rem;">' + esc(g.error || c.error) + '</p>'
+                : '') +
+              '<p style="margin:12px 0 0;font-size:0.68rem;color:#64748b;">Documento armado según campos mínimos Res.154 / DTE tipo 52. Use Imprimir para PDF de porte. La validez fiscal plena requiere estado EMITIDA con folio del SII.</p>';
+          } catch (e) {
+            body.innerHTML = '<p style="margin:0;color:#b91c1c;">No se pudo cargar la guía: ' +
+              String(e.message || e).replace(/</g, '&lt;') + '</p>';
+          }
+        };
+
+        // KPIs del sidebar: solo paradas abiertas (no ENTREGADO/canceladas)
+        window.actualizarKpisGlobales = function(viajes) {
+          var TERMINALES = { ENTREGADO:1, RECHAZADO:1, CANCELADO_PLANILLA:1, RETORNO_BODEGA:1 };
+          var monto = 0, riesgo = 0, abiertas = 0, atrasadas = 0;
+          var moneyFmt = function(val) { return '$' + Number(val || 0).toLocaleString('es-CL'); };
+          (viajes || []).forEach(function(v) {
+            (v.detalle_paradas || []).forEach(function(p) {
+              var est = String(p.estado_operacional || '').toUpperCase();
+              if (TERMINALES[est]) return;
+              var m = Number(p.monto_total || p.valor || 0);
+              monto += m;
+              abiertas += 1;
+              var late = p.eta && p.fecha_hora_sla &&
+                new Date(p.eta).getTime() > new Date(p.fecha_hora_sla).getTime();
+              if (late) {
+                atrasadas += 1;
+                riesgo += m * 0.10;
+              }
+            });
+          });
+          var otif = abiertas > 0
+            ? Math.max(0, Math.round(((abiertas - atrasadas) / abiertas) * 100))
+            : 100;
+          var elMonto = document.getElementById('kpiMontoCalle');
+          var elRiesgo = document.getElementById('kpiRiesgoSla');
+          var elOtif = document.getElementById('kpiOtifProyectado');
+          if (elMonto) elMonto.textContent = moneyFmt(monto);
+          if (elRiesgo) elRiesgo.textContent = moneyFmt(riesgo);
+          if (elOtif) elOtif.textContent = otif + '%';
+        };
+
         // ============================================================================
         // TIME_CL y formatHoraCL — disponibles globalmente en el cliente
         // (duplicadas desde el scope del servidor para que renderMensajesChat pueda usarlas)
@@ -1810,7 +2031,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           var money = function(val) { return '$' + Number(val || 0).toLocaleString('es-CL'); };
 
           var safeStr = function(s) {
-            return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
           };
           var safeHref = function(u) {
             var s = String(u == null ? '' : u).trim();
@@ -1899,6 +2120,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               // que el servidor genera en el forEach inicial. Los calculamos defensivamente.
               var etaStr      = (typeof formatHoraCL === 'function') ? formatHoraCL(p._eta_str      || p.eta)       : (p._eta_str      || '--:--');
               var horaRealStr = (typeof formatHoraCL === 'function') ? formatHoraCL(p._hora_real_str || p.hora_real) : (p._hora_real_str || '--:--');
+              var slaStr      = (typeof formatHoraCL === 'function') ? formatHoraCL(p._fecha_sla_str || p.fecha_hora_sla) : (p._fecha_sla_str || '--:--');
 
               var isLate = Boolean(p.eta && p.fecha_hora_sla && new Date(p.eta).getTime() > new Date(p.fecha_hora_sla).getTime());
               var isEntregado = p.estado_operacional === ESTADOS_ENTREGADO;
@@ -1998,7 +2220,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                   : '--:--';
                 horaHtml = '<span style="color:' + enSitioColor + ';">&#128205; Llegó: ' + safeStr(llegadaStr) + (minutosEspera > 0 ? ' (+' + minutosEspera + 'm)' : '') + '</span>';
               } else {
-                horaHtml = '&#9203; ETA: ' + safeStr(etaStr);
+                horaHtml = '&#9203; ETA: ' + safeStr(etaStr) + ' &bull; SLA: ' + safeStr(slaStr);
               }
 
               // Badge con nivel de urgencia para EN_SITIO
@@ -2006,29 +2228,33 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               var badgeStyle = isEnSitio ? 'background:' + enSitioColor + ';color:white;' : '';
               var badgeLabel = isEntregado ? 'ENTREGADO' : (isRechazado ? 'RECHAZADO' : (isEnSitio ? enSitioLabel : safeStr(p.estado_operacional || p.estado || 'PENDIENTE')));
 
-              // Badge guía Res. 154 (STUB ≠ OK — no bloquea reemisión real)
-              // Nota: este archivo es template literal; para emitir ' en el JS final usar \\'
+              // Badge guía Res. 154 — click abre detalle
               var guiaHtml = '';
               var ge = String(p.guia_estado || '').toUpperCase();
               var guiaTripAttr = safeStr(v.trip_id).replace(/'/g, '');
+              var guiaOtAttr = safeStr(p.ot_id).replace(/'/g, '');
               var guiaRetryClick = 'event.stopPropagation();window.retryGuiaTrip&&window.retryGuiaTrip(\\'' + guiaTripAttr + '\\')';
+              var guiaVerClick = 'event.stopPropagation();window.verGuiaElectronica&&window.verGuiaElectronica(\\'' + guiaOtAttr + '\\',\\'' + guiaTripAttr + '\\')';
+              var guiaBadgeStyle = 'font-size:0.55rem;margin-top:2px;cursor:pointer;';
               if (ge === 'EMITIDA') {
-                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Guía OK</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle · Folio ' + safeStr(p.guia_folio || '') + '" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'SKIPPED' && p.guia_folio && String(p.guia_folio).indexOf('STUB-') !== 0) {
-                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Guía OK</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle · Folio ' + safeStr(p.guia_folio || '') + '" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'STUB' || (ge === 'SKIPPED' && (!p.guia_folio || String(p.guia_folio).indexOf('STUB-') === 0))) {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="Stub — sin DTE real. Clic para reintentar" onclick="' + guiaRetryClick + '">Guía STUB</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle guía Res.154" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'REVIEW') {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Confirmar hora de emisión') + '" onclick="' + guiaRetryClick + '">Guía REV</div>';
+                guiaHtml = '<div class="badge b-orange" style="' + guiaBadgeStyle + '" title="' + safeStr(p.guia_error || 'Confirmar hora de emisión') + '" onclick="' + guiaRetryClick + '">Guía REV</div>';
               } else if (ge === 'ERROR') {
-                guiaHtml = '<div class="badge b-red" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Error') + '" onclick="' + guiaRetryClick + '">Guía ERR</div>';
+                guiaHtml = '<div class="badge b-red" style="' + guiaBadgeStyle + '" title="' + safeStr(p.guia_error || 'Error') + '" onclick="' + guiaRetryClick + '">Guía ERR</div>';
               } else if (ge === 'PENDING' || ge === 'EMITTING') {
                 guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;">Guía…</div>';
               }
               var hrefDoc = safeHref(p.uri);
               var docBtn = hrefDoc
-                ? '<a href="' + hrefDoc + '" target="_blank" rel="noopener noreferrer" class="btn-doc">&#128196; Ver Documento</a>'
-                : '<button disabled class="btn-doc">Documento Pendiente</button>';
+                ? '<a href="' + hrefDoc + '" target="_blank" rel="noopener noreferrer" class="btn-doc" onclick="event.stopPropagation();">&#128196; Ver Documento</a>'
+                : (ge
+                  ? '<button type="button" class="btn-doc" style="cursor:pointer;" onclick="' + guiaVerClick + '">&#128196; Ver guía</button>'
+                  : '<button disabled class="btn-doc">Documento Pendiente</button>');
               var hrefFoto = safeHref(p.evidencia_url);
               var hrefFirma = safeHref(p.firma_url);
               var podLinks = '';
@@ -2108,6 +2334,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     ' &bull; &#128205; ' + Number(v.km_recorridos || 0).toFixed(1) + ' km' +
                     ' &bull; <b>' + money(v.valor_total_viaje) + '</b>' +
                     ' &bull; Costo Op: <span style="color:var(--danger);">' + money(costoOp) + '</span>' +
+                    (function() {
+                      var tieneGuia = (v.detalle_paradas || []).some(function(p) {
+                        var ge = String(p.guia_estado || '').toUpperCase();
+                        return ge === 'EMITIDA' || ge === 'STUB' || ge === 'SKIPPED' || ge === 'REVIEW' || ge === 'ERROR' || ge === 'PENDING' || ge === 'EMITTING';
+                      });
+                      return tieneGuia
+                        ? ' <span style="color:#34d399;font-weight:700;">&bull; clic para ver gu&#237;as</span>'
+                        : '';
+                    })() +
                   '</div>' +
                 '</div>' +
                 badgeSlaHtml +
@@ -2428,6 +2663,22 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
         }
       };
 
+      // Mismo comparador que sortViajesSeguros (src/ui/server/calculosViaje.js):
+      // el SSR ordena riesgo > valor > trip_id, pero el poll nunca reordenaba —
+      // las tarjetas se reacomodaban solas cada ~5-10s con el orden crudo de la DB.
+      function sortViajesPorRiesgoCliente(viajes) {
+        viajes.sort(function(a, b) {
+          var riesgoA = (Number(a.entregas_rechazadas) > 0 || Number(a._riesgo_dinamico) > 0 || Number(a.sla_risk_score) >= 50) ? 1 : 0;
+          var riesgoB = (Number(b.entregas_rechazadas) > 0 || Number(b._riesgo_dinamico) > 0 || Number(b.sla_risk_score) >= 50) ? 1 : 0;
+          if (riesgoA !== riesgoB) return riesgoB - riesgoA;
+          var empA = Number(a.sla_risk_score) || 0;
+          var empB = Number(b.sla_risk_score) || 0;
+          if (empA !== empB) return empB - empA;
+          if (a.valor_total_viaje !== b.valor_total_viaje) return Number(b.valor_total_viaje) - Number(a.valor_total_viaje);
+          return String(a.trip_id || '').localeCompare(String(b.trip_id || ''));
+        });
+      }
+
       // Global: Ruta Rápida y otros scripts reinician el poll al cerrar modales
       let viajesRefreshInflight = null;
       const actualizarViajesSilencioso = async () => {
@@ -2471,10 +2722,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
 
           // Actualizar estado en memoria PRIMERO, luego re-renderizar
+          if (Array.isArray(data.viajes)) sortViajesPorRiesgoCliente(data.viajes);
           window.viajesActivos = data.viajes;
           window._fleetAlerts = Array.isArray(data.fleet_alerts) ? data.fleet_alerts : [];
           if (typeof window.renderLeadRescueBanner === 'function') {
             window.renderLeadRescueBanner(window._fleetAlerts);
+          }
+          if (typeof window.actualizarKpisGlobales === 'function') {
+            window.actualizarKpisGlobales(data.viajes || []);
           }
 
           var syncStatusEl = document.getElementById('syncStatus');
@@ -2567,11 +2822,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               if (btn.dataset.target === 'panel-backlog') {
                 btn.textContent = '📋 Backlog (' + backlogCount + ')';
               }
+              if (btn.dataset.target === 'panel-flota') {
+                btn.textContent = '🚚 Flota (' + (data.viajes || []).length + ')';
+              }
             });
 
-            // Actualizar panel backlog si no está activo (para no interrumpir al operador)
+            // Siempre refrescar el HTML del backlog (antes solo si NO estaba activo → lista stale tras Ruta Rápida)
             var panelBacklog = document.getElementById('panel-backlog');
-            if (panelBacklog && !panelBacklog.classList.contains('active')) {
+            if (panelBacklog) {
               var pendientesSorted = (data.ordenes_pendientes || []).slice().sort(function(a, b) {
                 return String(a.ot_id || '').localeCompare(String(b.ot_id || ''), 'es', { numeric: true });
               });
@@ -2995,7 +3253,8 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 const data = await res.json();
                 if (res.ok && data.exito) { 
                     alert(data.msg || "Cruce y Sincronización exitosa"); 
-                    if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso(); 
+                    if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                    if (typeof actualizarViajesSilencioso === 'function') await actualizarViajesSilencioso(); 
                 } else { throw new Error(data.error || "Falla en la sincronización cruzada."); }
               } catch (err) { alert("Error: " + err.message); } 
               finally { btn.disabled = false; btn.textContent = originalText; }
@@ -3021,6 +3280,10 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               if (busy) busy.hidden = false;
               
               try {
+                if (typeof actualizarViajesSilencioso === 'function') {
+                  if (busy) busy.textContent = 'Refrescando backlog antes de rutear…';
+                  await actualizarViajesSilencioso();
+                }
                 const res = await fetch('/api/optimizar-rutas', { 
                   method: 'POST',
                   credentials: 'same-origin',
@@ -3036,7 +3299,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 });
                 const data = await res.json();
                 
-                if (res.ok && (data.exito || data.viajes_creados > 0)) {
+                if (res.ok && Number(data.viajes_creados || 0) > 0) {
                   var syncOk = document.getElementById('syncStatus');
                   if (syncOk) {
                     syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados';
@@ -3061,6 +3324,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() { requestAnimationFrame(r); });
                     else setTimeout(r, 0);
                   });
+                } else if (res.ok && data.exito) {
+                  if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                  if (typeof actualizarViajesSilencioso === 'function') await actualizarViajesSilencioso();
+                  throw new Error(
+                    data.msg === 'NO_PENDING_ORDERS'
+                      ? 'No hay pedidos pendientes de ruteo en backlog.'
+                      : (data.msg || 'El ruteador terminó sin crear viajes.')
+                  );
                 } else { throw new Error(data.msg || data.error); }
               } catch (err) { alert(err.message || 'No se pudo rutear'); } 
               finally {
@@ -3177,7 +3448,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 if (typeof ordenesData !== 'undefined' && Array.isArray(ordenesData)) {
                   nBacklog = ordenesData.filter(function(o) {
                     var st = String(o.estado_operacional || '').toUpperCase();
-                    return !o.trip_id && (st === 'PENDIENTE_RUTEO' || st === 'PENDIENTE');
+                    return !o.trip_id && (st === 'PENDIENTE_RUTEO' || st === 'PENDIENTE' || st === 'PENDIENTE_CARGA');
                   }).length;
                 }
                 var bl = document.getElementById('recalcIncluirBacklog');
@@ -3369,7 +3640,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             if (b.estado === 'DISPONIBLE') return 1;
             return 0;
           });
-          selectChofer.innerHTML = '<option value="">-- Seleccionar chofer --</option>' +
+          selectChofer.innerHTML = '<option value="">-- Auto: usar N° de camiones del header --</option>' +
             sorted.map(function(c) {
               var estadoLabel = c.estado === 'OCUPADO' ? ' [EN RUTA]' : '';
               var score = (c.skill_score != null ? c.skill_score : 'N/A');
@@ -3395,20 +3666,17 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
         }
 
-        window.abrirRutaRapida = function() {
+        window.abrirRutaRapida = function(opts) {
           document.getElementById('modalRutaRapida').style.display = 'flex';
-          // Pausar el polling mientras el modal está abierto
           if (window.viajesRefreshTimer) {
             clearInterval(window.viajesRefreshTimer);
             window.viajesRefreshTimer = null;
             window._pollingPausado = true;
           }
-          // Limpiar paradas anteriores y agregar una vacía
           document.getElementById('rrParadas').innerHTML = '';
           document.getElementById('rrChofer').value = '';
           document.getElementById('rrDescCarga').value = '';
           document.getElementById('rrCamionListo').checked = false;
-          // Resetear estado de validación
           document.getElementById('rrValidacionPanel').style.display = 'none';
           window._rrCoordsCacheadas = [];
           var btnEnviar = document.getElementById('btnEnviarRR');
@@ -3419,9 +3687,104 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           btnEnviar.style.opacity = '0.5';
           document.getElementById('btnValidarRR').disabled = false;
           document.getElementById('btnValidarRR').textContent = '🔍 Validar Direcciones';
-          agregarParadaRR();
           rrRefrescarChoferes();
+          if (opts && opts.fromVideo) {
+            cargarBorradorVideoRR();
+            return;
+          }
+          agregarParadaRR();
         };
+
+        function rrEnableDespacho() {
+          var panel = document.getElementById('rrValidacionPanel');
+          var resumen = document.getElementById('rrValidacionResumen');
+          if (panel) panel.style.display = 'block';
+          if (resumen) {
+            resumen.innerHTML = '<span style="color:#10b981;font-weight:800;">✅ Direcciones listas. Revisá peso, ventanas y tipo de carga; después Crear y Despachar.</span>';
+          }
+          var btnEnviar = document.getElementById('btnEnviarRR');
+          if (btnEnviar) {
+            btnEnviar.disabled = false;
+            btnEnviar.style.background = 'linear-gradient(135deg,#f59e0b,#d97706)';
+            btnEnviar.style.color = 'white';
+            btnEnviar.style.cursor = 'pointer';
+            btnEnviar.style.opacity = '1';
+          }
+        }
+
+        async function cargarBorradorVideoRR() {
+          var loadSeq = (window._rrDraftLoadSeq || 0) + 1;
+          window._rrDraftLoadSeq = loadSeq;
+          try {
+            // Limpiar Flota/Backlog sucios para que el take del video empiece limpio (sin CLI)
+            try {
+              await rrFetch('/api/admin/qa/video-prep', {
+                method: 'POST',
+                body: JSON.stringify({ mode: 'empty' }),
+              });
+              if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+              if (typeof window.actualizarViajesSilencioso === 'function') {
+                await window.actualizarViajesSilencioso();
+              }
+            } catch (_) { /* si falla el wipe, igual cargamos el borrador */ }
+
+            const res = await rrFetch('/api/admin/qa/video-prep?mode=ruta_rapida_draft', { method: 'GET', headers: {} });
+            const data = await res.json().catch(function() { return {}; });
+            if (window._rrDraftLoadSeq !== loadSeq) return;
+            const draft = data && data.draft;
+            if (!draft || !Array.isArray(draft.paradas) || !draft.paradas.length) {
+              document.getElementById('rrParadas').innerHTML = '';
+              agregarParadaRR();
+              return;
+            }
+            document.getElementById('rrParadas').innerHTML = '';
+            document.getElementById('rrDescCarga').value = draft.descripcion_carga || '';
+            document.getElementById('rrCamionListo').checked = draft.camion_listo !== false;
+            var nCamEl = document.getElementById('camionesDisponibles');
+            if (nCamEl) nCamEl.value = '3';
+            var perfilEl = document.getElementById('perfilRuteo');
+            if (perfilEl) {
+              var eq = Array.from(perfilEl.options).find(function(o) {
+                return /equilibrad/i.test(o.text || '');
+              });
+              if (eq) perfilEl.value = eq.value;
+            }
+            window._rrCoordsCacheadas = [];
+            draft.paradas.forEach(function(p) {
+              agregarParadaRR();
+              var el = document.getElementById('rrParadas').lastElementChild;
+              if (!el) return;
+              if (el.querySelector('.rr-cliente')) el.querySelector('.rr-cliente').value = p.cliente || '';
+              if (el.querySelector('.rr-telefono')) el.querySelector('.rr-telefono').value = p.telefono || '';
+              if (el.querySelector('.rr-email')) el.querySelector('.rr-email').value = p.email || '';
+              if (el.querySelector('.rr-peso')) el.querySelector('.rr-peso').value = p.peso_kg != null ? p.peso_kg : '';
+              if (el.querySelector('.rr-volumen')) el.querySelector('.rr-volumen').value = p.volumen != null ? p.volumen : '';
+              if (el.querySelector('.rr-direccion')) {
+                el.querySelector('.rr-direccion').value = p.direccion || '';
+                if (p.lat != null) el.querySelector('.rr-direccion').dataset.lat = String(p.lat);
+                if (p.lng != null) el.querySelector('.rr-direccion').dataset.lng = String(p.lng);
+                el.querySelector('.rr-direccion').dataset.display = p.direccion || '';
+              }
+              if (el.querySelector('.rr-descripcion')) el.querySelector('.rr-descripcion').value = p.descripcion || '';
+              if (el.querySelector('.rr-monto')) el.querySelector('.rr-monto').value = p.monto != null ? p.monto : '';
+              if (el.querySelector('.rr-sla-hora')) el.querySelector('.rr-sla-hora').value = p.sla_hora || '18:00';
+              if (el.querySelector('.rr-ventana-inicio')) el.querySelector('.rr-ventana-inicio').value = p.ventana_inicio || '';
+              var tag = Array.isArray(p.tags) && p.tags[0] ? p.tags[0] : '';
+              if (el.querySelector('.rr-tags')) el.querySelector('.rr-tags').value = tag;
+              el.style.border = '1px solid #10b981';
+              window._rrCoordsCacheadas.push({
+                lat: p.lat, lng: p.lng, display: p.direccion, precision: p.precision || 'house'
+              });
+            });
+            rrEnableDespacho();
+            var btnValidar = document.getElementById('btnValidarRR');
+            if (btnValidar) { btnValidar.disabled = false; btnValidar.textContent = '🔄 Re-validar'; }
+          } catch (e) {
+            if (window._rrDraftLoadSeq !== loadSeq) return;
+            document.getElementById('rrParadas').innerHTML = '';
+            agregarParadaRR();
+          }
+        }
 
         window.cerrarRutaRapida = function() {
           document.getElementById('modalRutaRapida').style.display = 'none';
@@ -3429,7 +3792,9 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           if (window._pollingPausado) {
             window._pollingPausado = false;
             if (typeof window.actualizarViajesSilencioso === 'function') {
+              if (window.viajesRefreshTimer) clearInterval(window.viajesRefreshTimer);
               window.viajesRefreshTimer = setInterval(window.actualizarViajesSilencioso, 5000);
+              window.actualizarViajesSilencioso();
             }
           }
         };
@@ -3450,16 +3815,25 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             '</div>' +
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">' +
             '<input type="email" placeholder="Email (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-email" autocomplete="email">' +
-            '<input type="number" placeholder="Peso kg (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-peso" min="0" step="0.1">' +
+            '<select class="rr-tags" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:13px;background:#1e293b;color:#e2e8f0;" title="Tipo de carga — alimentos y peligrosa no van en el mismo camión">' +
+            '<option value="">Carga general</option>' +
+            '<option value="ALIMENTOS">Alimentos</option>' +
+            '<option value="PELIGROSO">Carga peligrosa</option>' +
+            '</select>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">' +
+            '<input type="number" placeholder="Peso kg" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-peso" min="0" step="0.1">' +
+            '<input type="number" placeholder="Volumen m³" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-volumen" min="0" step="0.1">' +
             '</div>' +
             '<div class="rr-dir-wrap" style="position:relative;margin-bottom:8px;">' +
             '<input type="text" placeholder="Empezá a escribir la dirección..." style="width:100%;padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;box-sizing:border-box;background:#1e293b;color:#e2e8f0;" class="rr-direccion" autocomplete="off" spellcheck="false">' +
             '<div class="rr-ac-list" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;background:#0f172a;border:1px solid #475569;border-radius:8px;max-height:240px;overflow-y:auto;box-shadow:0 16px 32px rgba(0,0,0,0.55);"></div>' +
             '</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;align-items:end;">' +
             '<input type="text" placeholder="Descripción bulto" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-descripcion">' +
             '<input type="number" placeholder="Monto (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-monto">' +
-            '<input type="number" placeholder="Horas SLA (def: 8)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-sla" min="1" max="72">' +
+            '<label style="display:flex;flex-direction:column;gap:4px;font-size:0.7rem;color:#94a3b8;font-weight:600;">Ventana desde<input type="time" min="00:00" max="23:59" step="60" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-ventana-inicio" title="Inicio de ventana horaria"></label>' +
+            '<label style="display:flex;flex-direction:column;gap:4px;font-size:0.7rem;color:#94a3b8;font-weight:600;">Hora límite SLA<input type="time" value="18:00" min="00:00" max="23:59" step="60" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-sla-hora" title="Hora del día (Chile) para cumplir el SLA"></label>' +
             '</div>' +
             (idx > 1 ? '<button onclick="this.parentElement.remove();renumerarParadas()" style="position:absolute;top:8px;right:8px;background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;">✕</button>' : '');
           container.appendChild(div);
@@ -3829,7 +4203,13 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           const camion_listo = document.getElementById('rrCamionListo').checked;
           const descripcion_carga = document.getElementById('rrDescCarga').value.trim();
 
-          if (!chofer_id) { alert('Debes seleccionar un chofer'); return; }
+          if (!chofer_id) {
+            var nCam = parseInt((document.getElementById('camionesDisponibles') || {}).value, 10);
+            if (!Number.isInteger(nCam) || nCam < 2) {
+              alert('Elegí un chofer, o poné N° de camiones ≥ 2 en el header (modo equilibrado) para partir la flota.');
+              return;
+            }
+          }
 
           const paradaEls = document.getElementById('rrParadas').children;
           const paradas = [];
@@ -3843,9 +4223,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               telefono: el.querySelector('.rr-telefono')?.value.trim() || null,
               email: el.querySelector('.rr-email')?.value.trim() || null,
               peso_kg: parseFloat(el.querySelector('.rr-peso')?.value) || 0,
+              volumen: parseFloat(el.querySelector('.rr-volumen')?.value) || 0,
               descripcion: el.querySelector('.rr-descripcion')?.value.trim() || null,
               monto: parseFloat(el.querySelector('.rr-monto')?.value) || 0,
-              sla_horas: parseInt(el.querySelector('.rr-sla')?.value) || 8,
+              sla_hora: el.querySelector('.rr-sla-hora')?.value || '18:00',
+              ventana_inicio: el.querySelector('.rr-ventana-inicio')?.value || null,
+              tags: (function() {
+                var t = el.querySelector('.rr-tags')?.value;
+                return t ? [t] : [];
+              })(),
             });
           }
 
@@ -3871,11 +4257,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             const res = await rrFetch('/api/quick-route', {
               method: 'POST',
               body: JSON.stringify({
-                chofer_id: chofer_id,
+                chofer_id: chofer_id || null,
                 camion_listo,
                 descripcion_carga,
                 paradas,
-                depot_id: (document.getElementById('depotRuteo') || {}).value || null
+                depot_id: (document.getElementById('depotRuteo') || {}).value || null,
+                flota_disponible: parseInt((document.getElementById('camionesDisponibles') || {}).value, 10) || 1,
+                perfil_id: (document.getElementById('perfilRuteo') || {}).value || 1,
+                clima: (document.getElementById('climaRuteo') || {}).value || 'NORMAL',
               })
             });
             const data = await res.json().catch(function() { return {}; });
@@ -3892,16 +4281,32 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               var kmStr = data.km_totales ? data.km_totales + ' km' : 'N/D';
               var costoStr = data.costo_operativo ? '$' + Number(data.costo_operativo).toLocaleString('es-CL') : 'N/D';
               var nl = String.fromCharCode(10);
+              var nViajes = data.viajes_creados || 1;
               alert('✅ Ruta creada exitosamente' + nl + nl +
-                'ID: ' + data.trip_id + nl +
+                (data.split_fleet ? ('Viajes: ' + nViajes + ' camiones' + nl) : ('ID: ' + data.trip_id + nl)) +
                 'Chofer: ' + data.chofer + nl +
                 'Paradas: ' + data.paradas_creadas + nl +
                 '📍 Distancia estimada: ' + kmStr + nl +
                 '💰 Costo operativo: ' + costoStr);
-              // Actualizar el panel sin recargar toda la página
-              if (typeof actualizarViajesSilencioso === 'function') {
-                actualizarViajesSilencioso();
+              // Refrescar flota/backlog/mapa sin recargar (usar window.*: esta fn vive en otro scope)
+              if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+              var refreshFn = typeof window.actualizarViajesSilencioso === 'function'
+                ? window.actualizarViajesSilencioso
+                : null;
+              if (refreshFn) {
+                try { await refreshFn(); } catch (_) { /* ignore */ }
+                // Segundo pase corto: el insert/optimizador a veces termina un tick después
+                setTimeout(function() {
+                  if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                  if (typeof window.actualizarViajesSilencioso === 'function') {
+                    window.actualizarViajesSilencioso();
+                  }
+                }, 800);
               }
+              // Si se crearon viajes, mostrar Flota; si quedaron pendientes, Backlog
+              var targetTab = (Number(nViajes) > 0) ? 'panel-flota' : 'panel-backlog';
+              var tabBtn = document.querySelector('.tab-btn[data-target="' + targetTab + '"]');
+              if (tabBtn) tabBtn.click();
             } else {
               alert('Error: ' + (data.error || 'Error desconocido'));
               // Reactivar botón de despacho si el error fue del servidor (no de validación)
@@ -3920,13 +4325,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
         };
 
-        // Inicializar con 1 parada vacía al abrir
         var modalRR = document.getElementById('modalRutaRapida');
         if (modalRR) {
-          // Cerrar al hacer click en el fondo oscuro
           modalRR.addEventListener('click', function(e) {
             if (e.target === this) cerrarRutaRapida();
           });
+        }
+        if (/[?&]video=rr(?:&|$)/.test(String(location.search || ''))) {
+          setTimeout(function() { window.abrirRutaRapida({ fromVideo: true }); }, 800);
         }
 
         // Cerrar con ESC — reactiva el polling igual que cerrarRutaRapida()
@@ -3966,7 +4372,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             var data = await res.json().catch(function() { return {}; });
             if (data.exito) {
               // Actualizar panel sin recargar — el filtro de terminales lo ocultará
-              if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso();
+              if (typeof window.actualizarViajesSilencioso === 'function') window.actualizarViajesSilencioso();
             } else {
               alert('Error al cancelar: ' + (data.error || ('HTTP ' + res.status)));
             }
@@ -4014,7 +4420,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
               setTimeout(function() {
                 cerrarEditarDireccion();
-                if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso();
+                if (typeof window.actualizarViajesSilencioso === 'function') window.actualizarViajesSilencioso();
               }, 1500);
             } else {
               resultado.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || 'Error desconocido') + '</span>';
@@ -4027,6 +4433,167 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
         };
         // ── /Modal Editar Dirección ────────────────────────────────────────
+
+        
+        (function initBodegaTab() {
+          if (!CONFIG.wms_enabled) return;
+          var panel = document.getElementById('panel-bodega');
+          if (!panel) return;
+
+          function esc(s) {
+            return String(s == null ? '' : s)
+              .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          }
+
+          function qty(n) {
+            var v = Number(n);
+            if (!Number.isFinite(v)) return '0';
+            return v % 1 === 0 ? String(v) : v.toFixed(1);
+          }
+
+          async function api(path, opts) {
+            var res = await fetch(path, Object.assign({ credentials: 'same-origin' }, opts || {}));
+            var data = await res.json().catch(function () { return {}; });
+            if (!res.ok) throw new Error(data.error || data.code || ('HTTP ' + res.status));
+            return data;
+          }
+
+          function render(data) {
+            var bajo = data.stock_bajo || [];
+            var cola = data.cola || [];
+            var listas = data.listas_sin_trip || [];
+            var stock = data.stock || [];
+            var depots = data.depots || CONFIG.depots || [];
+            var depotOpts = depots.map(function (d) {
+              return '<option value="' + esc(d.depot_id) + '">' + esc(d.nombre || d.depot_id) + '</option>';
+            }).join('');
+
+            var alertas = '';
+            if (bajo.length) {
+              alertas += '<div class="bodega-alert bodega-alert-warn"><b>Stock bajo (' + bajo.length + ')</b><ul>' +
+                bajo.map(function (s) {
+                  return '<li>' + esc(s.sku) + ' · ' + esc(s.nombre || '') + ' — disp. ' + qty(s.qty_disponible) +
+                    ' / mín. ' + qty(s.qty_minima) + '</li>';
+                }).join('') + '</ul></div>';
+            }
+            if (data.quiebres && data.quiebres.length) {
+              alertas += '<div class="bodega-alert bodega-alert-danger"><b>Quiebre (' + data.quiebres.length + ')</b> — no ruteables.</div>';
+            }
+            if (listas.length) {
+              alertas += '<div class="bodega-alert bodega-alert-ok"><b>Listas sin camión (' + listas.length + ')</b> — ya están en Pedidos pendientes.</div>';
+            }
+            if (!alertas) alertas = '<div class="bodega-alert">Sin alertas de stock.</div>';
+
+            var colaHtml = cola.length === 0
+              ? '<p class="bodega-muted">Sin OTs en picking/packing/quiebre.</p>'
+              : cola.map(function (o) {
+                  var btns = '';
+                  if (o.estado_operacional === 'PENDIENTE_PICKING' || o.estado_operacional === 'PICKING') {
+                    btns = '<button class="btn-bodega" data-act="picking" data-ot="' + esc(o.ot_id) + '">Pickeado</button>';
+                  } else if (o.estado_operacional === 'PACKING') {
+                    btns = '<button class="btn-bodega btn-bodega-ok" data-act="packing" data-ot="' + esc(o.ot_id) + '">Empacado / listo</button>';
+                  }
+                  var lineas = (o.lineas || []).map(function (l) {
+                    return esc(l.sku) + ' × ' + qty(l.qty);
+                  }).join(', ');
+                  return '<div class="bodega-ot">' +
+                    '<div><b>' + esc(o.ot_id) + '</b> · ' + esc(o.cliente || '') +
+                    '<div class="bodega-muted">' + esc(o.estado_operacional) + (lineas ? ' · ' + lineas : '') + '</div></div>' +
+                    btns + '</div>';
+                }).join('');
+
+            var stockHtml = stock.slice(0, 80).map(function (s) {
+              var cls = s.stock_bajo ? ' bodega-row-warn' : '';
+              return '<tr class="' + cls + '"><td>' + esc(s.sku) + '</td><td>' + esc(s.nombre || '') +
+                '</td><td>' + qty(s.qty_disponible) + '</td><td>' + qty(s.qty_reservada) +
+                '</td><td>' + qty(s.qty_minima) + '</td><td>' + esc(s.ubicacion || '—') + '</td></tr>';
+            }).join('');
+
+            panel.innerHTML =
+              '<div class="bodega-wrap">' +
+              '<div class="bodega-counts">Bajo: ' + (data.counts && data.counts.stock_bajo || 0) +
+              ' · Cola: ' + (data.counts && data.counts.cola || 0) +
+              ' · Listas: ' + (data.counts && data.counts.listas_sin_trip || 0) + '</div>' +
+              alertas +
+              '<h4 class="bodega-h">Cola de procesos</h4>' + colaHtml +
+              '<h4 class="bodega-h">Alta SKU</h4>' +
+              '<form id="bodegaAltaForm" class="bodega-form">' +
+              '<select name="depot_id">' + depotOpts + '</select>' +
+              '<input name="sku" placeholder="SKU" required maxlength="64">' +
+              '<input name="nombre" placeholder="Nombre" required maxlength="256">' +
+              '<input name="qty_inicial" type="number" step="0.001" min="0" placeholder="Stock inicial" value="0">' +
+              '<input name="qty_minima" type="number" step="0.001" min="0" placeholder="Mínimo" value="0">' +
+              '<input name="ubicacion" placeholder="Ubicación (B-3-12)" maxlength="64">' +
+              '<button type="submit" class="btn-bodega btn-bodega-ok">Guardar</button>' +
+              '</form>' +
+              '<h4 class="bodega-h">Inventario</h4>' +
+              '<table class="bodega-table"><thead><tr><th>SKU</th><th>Nombre</th><th>Disp.</th><th>Res.</th><th>Mín.</th><th>Ubic.</th></tr></thead>' +
+              '<tbody>' + (stockHtml || '<tr><td colspan="6" class="bodega-muted">Sin SKUs aún.</td></tr>') + '</tbody></table>' +
+              '<p class="bodega-muted">Reservar una OT: POST /api/bodega/reservar con ot_id, depot_id y lineas[{sku,qty}].</p>' +
+              '</div>';
+          }
+
+          async function load() {
+            try {
+              var data = await api('/api/bodega/resumen');
+              render(data);
+              var badge = document.querySelector('.tab-btn[data-target="panel-bodega"]');
+              if (badge) {
+                var n = (data.counts && (data.counts.stock_bajo + data.counts.quiebres)) || 0;
+                badge.textContent = n > 0 ? 'Bodega (' + n + ')' : 'Bodega';
+              }
+            } catch (e) {
+              panel.innerHTML = '<p class="bodega-muted">No se pudo cargar bodega: ' + esc(e.message) + '</p>';
+            }
+          }
+
+          panel.addEventListener('click', async function (e) {
+            var btn = e.target.closest('[data-act]');
+            if (!btn) return;
+            var ot = btn.getAttribute('data-ot');
+            var act = btn.getAttribute('data-act');
+            btn.disabled = true;
+            try {
+              await api('/api/bodega/' + act, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ot_id: ot })
+              });
+              await load();
+            } catch (err) {
+              alert(err.message);
+              btn.disabled = false;
+            }
+          });
+
+          panel.addEventListener('submit', async function (e) {
+            if (e.target.id !== 'bodegaAltaForm') return;
+            e.preventDefault();
+            var fd = new FormData(e.target);
+            try {
+              await api('/api/bodega/productos', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  depot_id: fd.get('depot_id'),
+                  sku: fd.get('sku'),
+                  nombre: fd.get('nombre'),
+                  qty_inicial: Number(fd.get('qty_inicial') || 0),
+                  qty_minima: Number(fd.get('qty_minima') || 0),
+                  ubicacion: fd.get('ubicacion') || null
+                })
+              });
+              await load();
+            } catch (err) {
+              alert(err.message);
+            }
+          });
+
+          load();
+          setInterval(function () {
+            if (typeof appState !== 'undefined' && appState.activeTab === 'panel-bodega') load();
+          }, 20000);
+        })();
 
       </script>
 
@@ -4044,9 +4611,9 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
             <div>
-              <label style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:6px;">Chofer *</label>
+              <label style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:6px;">Chofer (opcional)</label>
               <select id="rrChofer" style="width:100%;padding:10px;border:1px solid #334155;border-radius:8px;font-size:14px;background:#0f172a;color:#e2e8f0;">
-                <option value="">-- Seleccionar chofer --</option>
+                <option value="">-- Auto: usar N° de camiones del header --</option>
               </select>
             </div>
             <div>
@@ -4121,7 +4688,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             <button type="button" onclick="cerrarModalRecalcularRuteo()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#64748b;">✕</button>
           </div>
           <p id="recalcResumenValores" style="font-size:12px;color:#94a3b8;margin:0 0 12px 0;"></p>
-          <p style="font-size:13px;color:#cbd5e1;margin:0 0 10px 0;">Elegí qué viajes recalcular. Solo aparecen los que <strong>todavía no salieron</strong>. Los demás no se tocan.</p>
+          <p style="font-size:13px;color:#cbd5e1;margin:0 0 10px 0;">Elegí qué viajes recalcular. Solo aparecen los que <strong>todavía no salieron</strong>. El perfil, el clima y el <strong>N° de camiones</strong> del header se aplican a esas rutas (parte o junta). Un chofer de un viaje no marcado no se usa.</p>
           <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
             <button type="button" onclick="marcarTodosRecalcTrips(true)" style="padding:5px 10px;border:1px solid #334155;border-radius:6px;background:#0f172a;color:#94a3b8;cursor:pointer;font-size:12px;">Todas</button>
             <button type="button" onclick="marcarTodosRecalcTrips(false)" style="padding:5px 10px;border:1px solid #334155;border-radius:6px;background:#0f172a;color:#94a3b8;cursor:pointer;font-size:12px;">Ninguna</button>
@@ -4534,6 +5101,30 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
         .backlog-item { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--warning); border-radius: 6px; padding: 1rem; margin-bottom: 0.75rem; }
         .backlog-item.has-coords { cursor: pointer; }
         .backlog-item.has-coords:hover { border-color: var(--border-focus); }
+
+        /* BODEGA WMS-LITE */
+        .bodega-wrap { display: flex; flex-direction: column; gap: 0.9rem; }
+        .bodega-counts { font-size: 0.8rem; color: var(--text-muted); font-weight: 700; }
+        .bodega-h { font-size: 0.9rem; font-weight: 800; color: var(--text-main); margin-top: 0.2rem; }
+        .bodega-alert { padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 0.8rem; }
+        .bodega-alert ul { margin: 0.45rem 0 0 1rem; }
+        .bodega-alert-warn { border-color: #7c2d12; background: #451a03; color: #fdba74; }
+        .bodega-alert-danger { border-color: #7f1d1d; background: #450a0a; color: #fca5a5; }
+        .bodega-alert-ok { border-color: #065f46; background: #064e3b; color: #6ee7b7; }
+        .bodega-form { display: grid; grid-template-columns: 1.1fr 1fr 1.5fr 1fr 1fr 1fr auto; gap: 0.45rem; }
+        .bodega-form input, .bodega-form select {
+          padding: 0.45rem 0.55rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main);
+        }
+        .bodega-ot {
+          display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+          background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem;
+        }
+        .bodega-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+        .bodega-table th, .bodega-table td { padding: 0.5rem; border-bottom: 1px solid var(--border); text-align: left; }
+        .bodega-row-warn { background: rgba(245, 158, 11, 0.12); }
+        .btn-bodega { padding: 0.45rem 0.7rem; border-radius: 6px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; cursor: pointer; font-weight: 700; }
+        .btn-bodega-ok { background: #065f46; border-color: #047857; color: #d1fae5; }
+        .bodega-muted { color: var(--text-muted); font-size: 0.8rem; }
         
         /* MAP AREA */
         .map-container { flex: 1; position: relative; background: #e2e8f0; }
@@ -4735,21 +5326,22 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           <div class="global-kpis">
             <div class="kpi-box" style="border-top-color: var(--primary);">
               <div class="kpi-title">Monto en Calle</div>
-              <div class="kpi-val" style="color: var(--primary);">$525.000</div>
+              <div class="kpi-val" id="kpiMontoCalle" style="color: var(--primary);">$200.000</div>
             </div>
             <div class="kpi-box" style="border-top-color: var(--danger);">
               <div class="kpi-title" title="10% del monto de paradas abiertas cuyo ETA ya supera el SLA. No es multa histórica.">Riesgo SLA abierto</div>
-              <div class="kpi-val" style="color: var(--danger);">$0</div>
+              <div class="kpi-val" id="kpiRiesgoSla" style="color: var(--danger);">$0</div>
             </div>
             <div class="kpi-box" style="border-top-color: var(--success);">
               <div class="kpi-title" title="Paradas en viaje sin quiebre de SLA / total de paradas abiertas. El OTIF cerrado está en Dashboards.">OTIF proyectado</div>
-              <div class="kpi-val" style="color: var(--success);">100%</div>
+              <div class="kpi-val" id="kpiOtifProyectado" style="color: var(--success);">100%</div>
             </div>
           </div>
 
           <div class="tabs-header" role="tablist">
             <button class="tab-btn active" role="tab" aria-selected="true" data-target="panel-flota">🚚 Flota (1)</button>
             <button class="tab-btn" role="tab" aria-selected="false" data-target="panel-backlog">📋 Pedidos Pendientes (2)</button>
+            
           </div>
 
           <div id="search-container" style="padding: 1rem 1rem 0 1rem;">
@@ -4787,7 +5379,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                       </select>
                       
                       
-                        <select class="gps-interval-select" data-rut="undefined" style="width: 90px; font-size: 0.75rem; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); cursor: pointer;" title="Frecuencia GPS de la App">
+                        <select class="gps-interval-select" data-rut="" style="width: 90px; font-size: 0.75rem; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); cursor: pointer;" title="Frecuencia GPS de la App">
                           <option value="10" >⚡ 10s</option>
                           <option value="30" selected>🚗 30s</option>
                           <option value="60" >📱 1m</option>
@@ -4815,12 +5407,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                             <div style="font-size: 0.7rem; color: var(--text-muted); display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
                                <span>OT-2001 • $200.000</span>
                                <button disabled class="btn-doc">Documento Pendiente</button>
+                               
+                               
                             </div>
                           </div>
                           <div style="text-align: right; margin-left: auto;">
                             <div class="badge b-orange" style="font-size:0.6rem; margin-bottom: 2px;"> EN_RUTA</div>
+                              
                               <div style="font-size: 0.65rem; font-weight: 500; color: var(--text-muted);">
-                              ⏳ ETA: 10:00
+                              ⏳ ETA: 10:00 · SLA: 14:00
                             </div>
                           </div>
                         </div>
@@ -4835,10 +5430,13 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                             <div style="font-size: 0.7rem; color: var(--text-muted); display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.4rem;">
                                <span>OT-2002 • $150.000</span>
                                <button disabled class="btn-doc">Documento Pendiente</button>
+                               
+                               
                             </div>
                           </div>
                           <div style="text-align: right; margin-left: auto;">
                             <div class="badge b-green" style="font-size:0.6rem; margin-bottom: 2px;"> ENTREGADO</div>
+                              
                               <div style="font-size: 0.65rem; font-weight: 500; color: var(--text-muted);">
                               <span style="color: var(--success);">✅ Real: 08:30</span><div style="font-size:0.6rem; margin-top:2px; color:#10b981; font-weight:700;">⚡ 210m antes (ETA: 12:00)</div>
                             </div>
@@ -4880,6 +5478,8 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 </div>
                 
             </div>
+
+            
           </div>
         </aside>
 
@@ -4894,7 +5494,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <script id="ordenes-json" type="application/json">[{"ot_id":"OT-PEND-001","cliente":"Cliente Pendiente A","tenant_id":"empresa_demo","trip_id":"","estado_operacional":"PENDIENTE_RUTEO","monto_total":180000,"direccion":"Av. Las Condes 1234, Santiago","lat":-33.41,"lng":-70.55},{"ot_id":"OT-PEND-002","cliente":"Cliente Pendiente B","tenant_id":"empresa_demo","trip_id":null,"estado_operacional":"PENDIENTE_RUTEO","monto_total":95000,"direccion":"Calle Tocopilla 567, Providencia, Santiago","lat":-33.43,"lng":-70.61}]</script>
       <script id="viajes-json" type="application/json">[{"trip_id":"VIAJE-002","chofer":"María González","chofer_id":"CHF-02","detalle_paradas":[{"ot_id":"OT-2001","cliente":"Empresa Gamma","monto_total":200000,"estado_operacional":"EN_RUTA","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"--:--","_eta_str":"10:00","_search_str":"ot-2001 empresa gamma"},{"ot_id":"OT-2002","cliente":"Empresa Delta","monto_total":150000,"estado_operacional":"ENTREGADO","eta":"2025-07-01T16:00:00.000Z","fecha_hora_sla":"2025-07-01T13:00:00.000Z","hora_real":"2025-07-01T12:30:00.000Z","metadata":null,"_fecha_sla_str":"09:00","_hora_real_str":"08:30","_eta_str":"12:00","_search_str":"ot-2002 empresa delta"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-002 maría gonzález ot-2001 empresa gamma ot-2002 empresa delta","km_recorridos":0,"valor_total_viaje":350000,"total_paradas":2,"entregas_completadas":1,"entregas_rechazadas":0,"paradas_atrasadas":0},{"trip_id":"VIAJE-003","chofer":"Pedro Soto","chofer_id":"CHF-03","detalle_paradas":[{"ot_id":"OT-3001","cliente":"Empresa Epsilon","monto_total":100000,"estado_operacional":"ENTREGADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":"2025-07-01T10:00:00.000Z","metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"06:00","_eta_str":"10:00","_search_str":"ot-3001 empresa epsilon"},{"ot_id":"OT-3002","cliente":"Empresa Zeta","monto_total":75000,"estado_operacional":"RECHAZADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":"2025-07-01T11:00:00.000Z","metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"07:00","_eta_str":"10:00","_search_str":"ot-3002 empresa zeta"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-003 pedro soto ot-3001 empresa epsilon ot-3002 empresa zeta"}]</script>
-      <script id="config-json" type="application/json">{"BODEGA":{"LAT":-33.5132,"LNG":-70.7672,"NOMBRE":"Bodega Central"},"ESTADOS":{"PENDIENTE":"PENDIENTE_RUTEO","ASIGNADO":"CAMION_ASIGNADO","EN_RUTA":"EN_RUTA","ENTREGADO":"ENTREGADO","RECHAZADO":"RECHAZADO","CANCELADO":"CANCELADO_PLANILLA","RETORNO":"RETORNO_BODEGA"},"UI":{"COLORS":{"EXITO":"#10b981","ALERTA":"#ef4444","NEUTRAL":"#2563eb","WARNING":"#f59e0b"}},"tenant_id":"empresa_demo","operator":null,"depots":[],"dte_live":false,"last_sync_date":null}</script>
+      <script id="config-json" type="application/json">{"BODEGA":{"LAT":-33.5132,"LNG":-70.7672,"NOMBRE":"Bodega Central"},"ESTADOS":{"PENDIENTE":"PENDIENTE_RUTEO","ASIGNADO":"CAMION_ASIGNADO","EN_RUTA":"EN_RUTA","ENTREGADO":"ENTREGADO","RECHAZADO":"RECHAZADO","CANCELADO":"CANCELADO_PLANILLA","RETORNO":"RETORNO_BODEGA"},"UI":{"COLORS":{"EXITO":"#10b981","ALERTA":"#ef4444","NEUTRAL":"#2563eb","WARNING":"#f59e0b"}},"WMS":{"ENABLED":false},"tenant_id":"empresa_demo","operator":null,"depots":[],"dte_live":false,"wms_enabled":false,"last_sync_date":null}</script>
       <script id="choferes-json" type="application/json">[{"chofer_id":"CHF-01","nombre_completo":"Juan Pérez Morales","rut":"","gps_interval_seconds":10},{"chofer_id":"CHF-02","nombre_completo":"María González López","rut":"","gps_interval_seconds":30}]</script>
 
         <div id="chatOffcanvas" class="chat-panel">
@@ -5760,6 +6360,185 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
         };
 
+        window.verGuiaElectronica = async function(otId, tripId) {
+          if (!otId && !tripId) return;
+          var modal = document.getElementById('modalGuiaElectronica');
+          if (!modal) {
+            modal = document.createElement('div');
+            modal.id = 'modalGuiaElectronica';
+            modal.style.cssText = 'display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);align-items:center;justify-content:center;padding:1rem;overflow:auto;';
+            modal.innerHTML =
+              '<div id="guiaComprobanteSheet" style="background:#fff;color:#0f172a;border-radius:10px;max-width:640px;width:100%;padding:1.35rem 1.5rem;box-shadow:0 24px 60px rgba(0,0,0,0.45);font-family:Georgia,serif;">' +
+                '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:0.85rem;border-bottom:2px solid #0f172a;padding-bottom:0.65rem;">' +
+                  '<div>' +
+                    '<div style="font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;font-family:system-ui,sans-serif;">SII · DTE Tipo 52</div>' +
+                    '<h3 style="margin:2px 0 0;font-size:1.15rem;color:#0f172a;">Guía de Despacho Electrónica</h3>' +
+                    '<div style="font-size:0.72rem;color:#475569;font-family:system-ui,sans-serif;margin-top:2px;">Res. Ex. SII N°154/2025 · obligatoria desde 1 nov 2026</div>' +
+                  '</div>' +
+                  '<div style="display:flex;gap:6px;font-family:system-ui,sans-serif;">' +
+                    '<button type="button" id="btnImprimirGuiaModal" style="background:#0f172a;border:none;color:#fff;font-size:0.75rem;padding:6px 10px;border-radius:6px;cursor:pointer;">Imprimir</button>' +
+                    '<button type="button" id="btnCerrarGuiaModal" style="background:transparent;border:1px solid #cbd5e1;color:#334155;font-size:0.75rem;padding:6px 10px;border-radius:6px;cursor:pointer;">Cerrar</button>' +
+                  '</div>' +
+                '</div>' +
+                '<div id="guiaModalBody" style="font-size:0.82rem;line-height:1.45;color:#1e293b;font-family:system-ui,sans-serif;">Cargando…</div>' +
+              '</div>';
+            document.body.appendChild(modal);
+            if (!document.getElementById('guiaPrintStyles')) {
+              var style = document.createElement('style');
+              style.id = 'guiaPrintStyles';
+              style.textContent = '@media print{body>*{visibility:hidden!important;}#modalGuiaElectronica,#modalGuiaElectronica *{visibility:visible!important;}#modalGuiaElectronica{position:static!important;inset:auto!important;background:#fff!important;display:block!important;padding:0!important;}#guiaComprobanteSheet{box-shadow:none!important;max-width:100%!important;}#btnImprimirGuiaModal,#btnCerrarGuiaModal{display:none!important;}}';
+              document.head.appendChild(style);
+            }
+            modal.addEventListener('click', function(e) {
+              if (e.target === modal) modal.style.display = 'none';
+            });
+            document.getElementById('btnCerrarGuiaModal').onclick = function() {
+              modal.style.display = 'none';
+            };
+            document.getElementById('btnImprimirGuiaModal').onclick = function() {
+              window.print();
+            };
+          }
+          var body = document.getElementById('guiaModalBody');
+          body.textContent = 'Cargando…';
+          modal.style.display = 'flex';
+          try {
+            var qs = otId
+              ? ('ot_id=' + encodeURIComponent(otId))
+              : ('trip_id=' + encodeURIComponent(tripId));
+            var res = await fetch('/api/guias-despacho?' + qs, { credentials: 'same-origin' });
+            var data = await res.json().catch(function() { return {}; });
+            if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+            var guias = Array.isArray(data.guias) ? data.guias : [];
+            var g = otId
+              ? (guias.find(function(x) { return String(x.ot_id) === String(otId); }) || guias[0])
+              : guias[0];
+            if (!g) {
+              body.innerHTML = '<p style="margin:0;color:#b45309;">Aún no hay guía registrada para esta parada.</p>';
+              return;
+            }
+            var c = g.comprobante || {};
+            var t = c.transporte || {};
+            var em = c.emisor || data.emisor || {};
+            var rec = c.receptor || {};
+            var det = (c.detalle && c.detalle[0]) || {};
+            var esc = function(v) {
+              return String(v == null || v === '' ? '—' : v).replace(/</g, '&lt;');
+            };
+            var money = function(v) {
+              if (v == null || v === '' || isNaN(Number(v))) return '—';
+              return '$' + Number(v).toLocaleString('es-CL');
+            };
+            var fechaFull = function(iso) {
+              if (!iso) return '—';
+              try {
+                return new Date(iso).toLocaleString('es-CL', {
+                  timeZone: 'America/Santiago',
+                  year: 'numeric', month: '2-digit', day: '2-digit',
+                  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                });
+              } catch (e) { return String(iso); }
+            };
+            var row = function(label, val) {
+              return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid #e2e8f0;">' +
+                '<span style="color:#64748b;font-weight:600;min-width:38%;">' + label + '</span>' +
+                '<span style="text-align:right;color:#0f172a;word-break:break-word;">' + esc(val) + '</span></div>';
+            };
+            var section = function(title, html) {
+              return '<div style="margin-top:0.85rem;"><div style="font-size:0.68rem;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#334155;margin-bottom:4px;">' +
+                title + '</div>' + html + '</div>';
+            };
+            var banner = c.listo_para_fiscalizacion
+              ? '<div style="background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">✓ Comprobante DTE 52 completo con folio SII — listo para fiscalización.</div>'
+              : (c.comprobante_completo
+                ? '<div style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">Comprobante Res.154 completo (tipo 52). Falta folio SII timbrado: conectar SimpleAPI/Lioren para validez ante fiscalización.</div>'
+                : '<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:8px 10px;border-radius:8px;font-size:0.75rem;margin-bottom:0.75rem;">Incompleto: ' +
+                  esc((c.faltantes_res154 || []).join(', ') || c.aviso_fiscalizacion || 'revisar campos') + '</div>');
+            body.innerHTML = banner +
+              section('Identificación DTE',
+                row('Tipo DTE', (c.tipo_dte || 52) + ' — ' + (c.tipo_dte_glosa || 'Guía de Despacho Electrónica')) +
+                row('Estado', c.estado || g.estado || '—') +
+                row('Folio', c.folio || (String(c.estado || g.estado || '').toUpperCase() === 'STUB' ? 'Pendiente timbraje SII (staging stub)' : '—')) +
+                row('Track ID', c.track_id || '—') +
+                row('Referencia', c.referencia_externa || '—') +
+                row('Ambiente', c.ambiente || '—') +
+                row('Proveedor', c.proveedor || g.proveedor || '—')
+              ) +
+              section('Emisor',
+                row('RUT', em.rut || '—') +
+                row('Razón social', em.razon_social || '—')
+              ) +
+              section('Receptor',
+                row('RUT', rec.rut || '—') +
+                row('Razón social', rec.razon_social || '—')
+              ) +
+              section('Transporte / traslado',
+                row('IndTraslado', (c.ind_traslado != null ? c.ind_traslado : '—') + ' — ' + (c.ind_traslado_glosa || c.tipo_traslado || '')) +
+                row('Tipo despacho', (c.tipo_despacho != null ? c.tipo_despacho : '—') + ' — ' + (c.tipo_despacho_glosa || '')) +
+                row('Patente', t.patente || '—') +
+                row('Conductor', (t.conductor_nombre || '—') + (t.conductor_rut ? (' · ' + t.conductor_rut) : '')) +
+                row('Origen', t.origen_direccion
+                  ? (String(t.origen_direccion).indexOf(',') >= 0 || !t.origen_comuna
+                    ? t.origen_direccion
+                    : (t.origen_direccion + ', ' + t.origen_comuna))
+                  : (t.origen_comuna || '—')) +
+                row('Destino', t.destino_direccion
+                  ? (String(t.destino_direccion).indexOf(',') >= 0 || !t.destino_comuna
+                    ? t.destino_direccion
+                    : (t.destino_direccion + ', ' + t.destino_comuna))
+                  : (t.destino_comuna || '—')) +
+                row('Emisión (inicio traslado)', fechaFull(c.fecha_emision || g.fecha_emision)) +
+                row('Fecha estimada entrega', fechaFull(c.fecha_estimada_entrega || g.fecha_estimada_entrega))
+              ) +
+              section('Detalle de bienes',
+                row('Ítem / OT', det.nombre || det.ot_id || g.ot_id || '—') +
+                row('Viaje', det.trip_id || g.trip_id || '—') +
+                row('Cantidad', det.cantidad != null ? (det.cantidad + ' ' + (det.unidad || 'UN')) : '—') +
+                row('Valor', money(det.precio)) +
+                row('Peso (kg)', det.peso_kg != null ? det.peso_kg : '—') +
+                row('Volumen', det.volumen != null ? det.volumen : '—')
+              ) +
+              (g.error || c.error
+                ? '<p style="margin:10px 0 0;color:#b91c1c;font-size:0.75rem;">' + esc(g.error || c.error) + '</p>'
+                : '') +
+              '<p style="margin:12px 0 0;font-size:0.68rem;color:#64748b;">Documento armado según campos mínimos Res.154 / DTE tipo 52. Use Imprimir para PDF de porte. La validez fiscal plena requiere estado EMITIDA con folio del SII.</p>';
+          } catch (e) {
+            body.innerHTML = '<p style="margin:0;color:#b91c1c;">No se pudo cargar la guía: ' +
+              String(e.message || e).replace(/</g, '&lt;') + '</p>';
+          }
+        };
+
+        // KPIs del sidebar: solo paradas abiertas (no ENTREGADO/canceladas)
+        window.actualizarKpisGlobales = function(viajes) {
+          var TERMINALES = { ENTREGADO:1, RECHAZADO:1, CANCELADO_PLANILLA:1, RETORNO_BODEGA:1 };
+          var monto = 0, riesgo = 0, abiertas = 0, atrasadas = 0;
+          var moneyFmt = function(val) { return '$' + Number(val || 0).toLocaleString('es-CL'); };
+          (viajes || []).forEach(function(v) {
+            (v.detalle_paradas || []).forEach(function(p) {
+              var est = String(p.estado_operacional || '').toUpperCase();
+              if (TERMINALES[est]) return;
+              var m = Number(p.monto_total || p.valor || 0);
+              monto += m;
+              abiertas += 1;
+              var late = p.eta && p.fecha_hora_sla &&
+                new Date(p.eta).getTime() > new Date(p.fecha_hora_sla).getTime();
+              if (late) {
+                atrasadas += 1;
+                riesgo += m * 0.10;
+              }
+            });
+          });
+          var otif = abiertas > 0
+            ? Math.max(0, Math.round(((abiertas - atrasadas) / abiertas) * 100))
+            : 100;
+          var elMonto = document.getElementById('kpiMontoCalle');
+          var elRiesgo = document.getElementById('kpiRiesgoSla');
+          var elOtif = document.getElementById('kpiOtifProyectado');
+          if (elMonto) elMonto.textContent = moneyFmt(monto);
+          if (elRiesgo) elRiesgo.textContent = moneyFmt(riesgo);
+          if (elOtif) elOtif.textContent = otif + '%';
+        };
+
         // ============================================================================
         // TIME_CL y formatHoraCL — disponibles globalmente en el cliente
         // (duplicadas desde el scope del servidor para que renderMensajesChat pueda usarlas)
@@ -5788,7 +6567,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           var money = function(val) { return '$' + Number(val || 0).toLocaleString('es-CL'); };
 
           var safeStr = function(s) {
-            return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
           };
           var safeHref = function(u) {
             var s = String(u == null ? '' : u).trim();
@@ -5877,6 +6656,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               // que el servidor genera en el forEach inicial. Los calculamos defensivamente.
               var etaStr      = (typeof formatHoraCL === 'function') ? formatHoraCL(p._eta_str      || p.eta)       : (p._eta_str      || '--:--');
               var horaRealStr = (typeof formatHoraCL === 'function') ? formatHoraCL(p._hora_real_str || p.hora_real) : (p._hora_real_str || '--:--');
+              var slaStr      = (typeof formatHoraCL === 'function') ? formatHoraCL(p._fecha_sla_str || p.fecha_hora_sla) : (p._fecha_sla_str || '--:--');
 
               var isLate = Boolean(p.eta && p.fecha_hora_sla && new Date(p.eta).getTime() > new Date(p.fecha_hora_sla).getTime());
               var isEntregado = p.estado_operacional === ESTADOS_ENTREGADO;
@@ -5976,7 +6756,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                   : '--:--';
                 horaHtml = '<span style="color:' + enSitioColor + ';">&#128205; Llegó: ' + safeStr(llegadaStr) + (minutosEspera > 0 ? ' (+' + minutosEspera + 'm)' : '') + '</span>';
               } else {
-                horaHtml = '&#9203; ETA: ' + safeStr(etaStr);
+                horaHtml = '&#9203; ETA: ' + safeStr(etaStr) + ' &bull; SLA: ' + safeStr(slaStr);
               }
 
               // Badge con nivel de urgencia para EN_SITIO
@@ -5984,29 +6764,33 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               var badgeStyle = isEnSitio ? 'background:' + enSitioColor + ';color:white;' : '';
               var badgeLabel = isEntregado ? 'ENTREGADO' : (isRechazado ? 'RECHAZADO' : (isEnSitio ? enSitioLabel : safeStr(p.estado_operacional || p.estado || 'PENDIENTE')));
 
-              // Badge guía Res. 154 (STUB ≠ OK — no bloquea reemisión real)
-              // Nota: este archivo es template literal; para emitir ' en el JS final usar \\'
+              // Badge guía Res. 154 — click abre detalle
               var guiaHtml = '';
               var ge = String(p.guia_estado || '').toUpperCase();
               var guiaTripAttr = safeStr(v.trip_id).replace(/'/g, '');
+              var guiaOtAttr = safeStr(p.ot_id).replace(/'/g, '');
               var guiaRetryClick = 'event.stopPropagation();window.retryGuiaTrip&&window.retryGuiaTrip(\\'' + guiaTripAttr + '\\')';
+              var guiaVerClick = 'event.stopPropagation();window.verGuiaElectronica&&window.verGuiaElectronica(\\'' + guiaOtAttr + '\\',\\'' + guiaTripAttr + '\\')';
+              var guiaBadgeStyle = 'font-size:0.55rem;margin-top:2px;cursor:pointer;';
               if (ge === 'EMITIDA') {
-                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Guía OK</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle · Folio ' + safeStr(p.guia_folio || '') + '" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'SKIPPED' && p.guia_folio && String(p.guia_folio).indexOf('STUB-') !== 0) {
-                guiaHtml = '<div class="badge b-green" style="font-size:0.55rem;margin-top:2px;" title="Folio ' + safeStr(p.guia_folio || '') + '">Guía OK</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle · Folio ' + safeStr(p.guia_folio || '') + '" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'STUB' || (ge === 'SKIPPED' && (!p.guia_folio || String(p.guia_folio).indexOf('STUB-') === 0))) {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="Stub — sin DTE real. Clic para reintentar" onclick="' + guiaRetryClick + '">Guía STUB</div>';
+                guiaHtml = '<div class="badge b-green" style="' + guiaBadgeStyle + '" title="Ver detalle guía Res.154" onclick="' + guiaVerClick + '">Guía electrónica</div>';
               } else if (ge === 'REVIEW') {
-                guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Confirmar hora de emisión') + '" onclick="' + guiaRetryClick + '">Guía REV</div>';
+                guiaHtml = '<div class="badge b-orange" style="' + guiaBadgeStyle + '" title="' + safeStr(p.guia_error || 'Confirmar hora de emisión') + '" onclick="' + guiaRetryClick + '">Guía REV</div>';
               } else if (ge === 'ERROR') {
-                guiaHtml = '<div class="badge b-red" style="font-size:0.55rem;margin-top:2px;cursor:pointer;" title="' + safeStr(p.guia_error || 'Error') + '" onclick="' + guiaRetryClick + '">Guía ERR</div>';
+                guiaHtml = '<div class="badge b-red" style="' + guiaBadgeStyle + '" title="' + safeStr(p.guia_error || 'Error') + '" onclick="' + guiaRetryClick + '">Guía ERR</div>';
               } else if (ge === 'PENDING' || ge === 'EMITTING') {
                 guiaHtml = '<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;">Guía…</div>';
               }
               var hrefDoc = safeHref(p.uri);
               var docBtn = hrefDoc
-                ? '<a href="' + hrefDoc + '" target="_blank" rel="noopener noreferrer" class="btn-doc">&#128196; Ver Documento</a>'
-                : '<button disabled class="btn-doc">Documento Pendiente</button>';
+                ? '<a href="' + hrefDoc + '" target="_blank" rel="noopener noreferrer" class="btn-doc" onclick="event.stopPropagation();">&#128196; Ver Documento</a>'
+                : (ge
+                  ? '<button type="button" class="btn-doc" style="cursor:pointer;" onclick="' + guiaVerClick + '">&#128196; Ver guía</button>'
+                  : '<button disabled class="btn-doc">Documento Pendiente</button>');
               var hrefFoto = safeHref(p.evidencia_url);
               var hrefFirma = safeHref(p.firma_url);
               var podLinks = '';
@@ -6086,6 +6870,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     ' &bull; &#128205; ' + Number(v.km_recorridos || 0).toFixed(1) + ' km' +
                     ' &bull; <b>' + money(v.valor_total_viaje) + '</b>' +
                     ' &bull; Costo Op: <span style="color:var(--danger);">' + money(costoOp) + '</span>' +
+                    (function() {
+                      var tieneGuia = (v.detalle_paradas || []).some(function(p) {
+                        var ge = String(p.guia_estado || '').toUpperCase();
+                        return ge === 'EMITIDA' || ge === 'STUB' || ge === 'SKIPPED' || ge === 'REVIEW' || ge === 'ERROR' || ge === 'PENDING' || ge === 'EMITTING';
+                      });
+                      return tieneGuia
+                        ? ' <span style="color:#34d399;font-weight:700;">&bull; clic para ver gu&#237;as</span>'
+                        : '';
+                    })() +
                   '</div>' +
                 '</div>' +
                 badgeSlaHtml +
@@ -6406,6 +7199,22 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
         }
       };
 
+      // Mismo comparador que sortViajesSeguros (src/ui/server/calculosViaje.js):
+      // el SSR ordena riesgo > valor > trip_id, pero el poll nunca reordenaba —
+      // las tarjetas se reacomodaban solas cada ~5-10s con el orden crudo de la DB.
+      function sortViajesPorRiesgoCliente(viajes) {
+        viajes.sort(function(a, b) {
+          var riesgoA = (Number(a.entregas_rechazadas) > 0 || Number(a._riesgo_dinamico) > 0 || Number(a.sla_risk_score) >= 50) ? 1 : 0;
+          var riesgoB = (Number(b.entregas_rechazadas) > 0 || Number(b._riesgo_dinamico) > 0 || Number(b.sla_risk_score) >= 50) ? 1 : 0;
+          if (riesgoA !== riesgoB) return riesgoB - riesgoA;
+          var empA = Number(a.sla_risk_score) || 0;
+          var empB = Number(b.sla_risk_score) || 0;
+          if (empA !== empB) return empB - empA;
+          if (a.valor_total_viaje !== b.valor_total_viaje) return Number(b.valor_total_viaje) - Number(a.valor_total_viaje);
+          return String(a.trip_id || '').localeCompare(String(b.trip_id || ''));
+        });
+      }
+
       // Global: Ruta Rápida y otros scripts reinician el poll al cerrar modales
       let viajesRefreshInflight = null;
       const actualizarViajesSilencioso = async () => {
@@ -6449,10 +7258,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
 
           // Actualizar estado en memoria PRIMERO, luego re-renderizar
+          if (Array.isArray(data.viajes)) sortViajesPorRiesgoCliente(data.viajes);
           window.viajesActivos = data.viajes;
           window._fleetAlerts = Array.isArray(data.fleet_alerts) ? data.fleet_alerts : [];
           if (typeof window.renderLeadRescueBanner === 'function') {
             window.renderLeadRescueBanner(window._fleetAlerts);
+          }
+          if (typeof window.actualizarKpisGlobales === 'function') {
+            window.actualizarKpisGlobales(data.viajes || []);
           }
 
           var syncStatusEl = document.getElementById('syncStatus');
@@ -6545,11 +7358,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               if (btn.dataset.target === 'panel-backlog') {
                 btn.textContent = '📋 Backlog (' + backlogCount + ')';
               }
+              if (btn.dataset.target === 'panel-flota') {
+                btn.textContent = '🚚 Flota (' + (data.viajes || []).length + ')';
+              }
             });
 
-            // Actualizar panel backlog si no está activo (para no interrumpir al operador)
+            // Siempre refrescar el HTML del backlog (antes solo si NO estaba activo → lista stale tras Ruta Rápida)
             var panelBacklog = document.getElementById('panel-backlog');
-            if (panelBacklog && !panelBacklog.classList.contains('active')) {
+            if (panelBacklog) {
               var pendientesSorted = (data.ordenes_pendientes || []).slice().sort(function(a, b) {
                 return String(a.ot_id || '').localeCompare(String(b.ot_id || ''), 'es', { numeric: true });
               });
@@ -6973,7 +7789,8 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 const data = await res.json();
                 if (res.ok && data.exito) { 
                     alert(data.msg || "Cruce y Sincronización exitosa"); 
-                    if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso(); 
+                    if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                    if (typeof actualizarViajesSilencioso === 'function') await actualizarViajesSilencioso(); 
                 } else { throw new Error(data.error || "Falla en la sincronización cruzada."); }
               } catch (err) { alert("Error: " + err.message); } 
               finally { btn.disabled = false; btn.textContent = originalText; }
@@ -6999,6 +7816,10 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               if (busy) busy.hidden = false;
               
               try {
+                if (typeof actualizarViajesSilencioso === 'function') {
+                  if (busy) busy.textContent = 'Refrescando backlog antes de rutear…';
+                  await actualizarViajesSilencioso();
+                }
                 const res = await fetch('/api/optimizar-rutas', { 
                   method: 'POST',
                   credentials: 'same-origin',
@@ -7014,7 +7835,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 });
                 const data = await res.json();
                 
-                if (res.ok && (data.exito || data.viajes_creados > 0)) {
+                if (res.ok && Number(data.viajes_creados || 0) > 0) {
                   var syncOk = document.getElementById('syncStatus');
                   if (syncOk) {
                     syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados';
@@ -7039,6 +7860,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() { requestAnimationFrame(r); });
                     else setTimeout(r, 0);
                   });
+                } else if (res.ok && data.exito) {
+                  if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                  if (typeof actualizarViajesSilencioso === 'function') await actualizarViajesSilencioso();
+                  throw new Error(
+                    data.msg === 'NO_PENDING_ORDERS'
+                      ? 'No hay pedidos pendientes de ruteo en backlog.'
+                      : (data.msg || 'El ruteador terminó sin crear viajes.')
+                  );
                 } else { throw new Error(data.msg || data.error); }
               } catch (err) { alert(err.message || 'No se pudo rutear'); } 
               finally {
@@ -7155,7 +7984,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 if (typeof ordenesData !== 'undefined' && Array.isArray(ordenesData)) {
                   nBacklog = ordenesData.filter(function(o) {
                     var st = String(o.estado_operacional || '').toUpperCase();
-                    return !o.trip_id && (st === 'PENDIENTE_RUTEO' || st === 'PENDIENTE');
+                    return !o.trip_id && (st === 'PENDIENTE_RUTEO' || st === 'PENDIENTE' || st === 'PENDIENTE_CARGA');
                   }).length;
                 }
                 var bl = document.getElementById('recalcIncluirBacklog');
@@ -7347,7 +8176,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             if (b.estado === 'DISPONIBLE') return 1;
             return 0;
           });
-          selectChofer.innerHTML = '<option value="">-- Seleccionar chofer --</option>' +
+          selectChofer.innerHTML = '<option value="">-- Auto: usar N° de camiones del header --</option>' +
             sorted.map(function(c) {
               var estadoLabel = c.estado === 'OCUPADO' ? ' [EN RUTA]' : '';
               var score = (c.skill_score != null ? c.skill_score : 'N/A');
@@ -7373,20 +8202,17 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
         }
 
-        window.abrirRutaRapida = function() {
+        window.abrirRutaRapida = function(opts) {
           document.getElementById('modalRutaRapida').style.display = 'flex';
-          // Pausar el polling mientras el modal está abierto
           if (window.viajesRefreshTimer) {
             clearInterval(window.viajesRefreshTimer);
             window.viajesRefreshTimer = null;
             window._pollingPausado = true;
           }
-          // Limpiar paradas anteriores y agregar una vacía
           document.getElementById('rrParadas').innerHTML = '';
           document.getElementById('rrChofer').value = '';
           document.getElementById('rrDescCarga').value = '';
           document.getElementById('rrCamionListo').checked = false;
-          // Resetear estado de validación
           document.getElementById('rrValidacionPanel').style.display = 'none';
           window._rrCoordsCacheadas = [];
           var btnEnviar = document.getElementById('btnEnviarRR');
@@ -7397,9 +8223,104 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           btnEnviar.style.opacity = '0.5';
           document.getElementById('btnValidarRR').disabled = false;
           document.getElementById('btnValidarRR').textContent = '🔍 Validar Direcciones';
-          agregarParadaRR();
           rrRefrescarChoferes();
+          if (opts && opts.fromVideo) {
+            cargarBorradorVideoRR();
+            return;
+          }
+          agregarParadaRR();
         };
+
+        function rrEnableDespacho() {
+          var panel = document.getElementById('rrValidacionPanel');
+          var resumen = document.getElementById('rrValidacionResumen');
+          if (panel) panel.style.display = 'block';
+          if (resumen) {
+            resumen.innerHTML = '<span style="color:#10b981;font-weight:800;">✅ Direcciones listas. Revisá peso, ventanas y tipo de carga; después Crear y Despachar.</span>';
+          }
+          var btnEnviar = document.getElementById('btnEnviarRR');
+          if (btnEnviar) {
+            btnEnviar.disabled = false;
+            btnEnviar.style.background = 'linear-gradient(135deg,#f59e0b,#d97706)';
+            btnEnviar.style.color = 'white';
+            btnEnviar.style.cursor = 'pointer';
+            btnEnviar.style.opacity = '1';
+          }
+        }
+
+        async function cargarBorradorVideoRR() {
+          var loadSeq = (window._rrDraftLoadSeq || 0) + 1;
+          window._rrDraftLoadSeq = loadSeq;
+          try {
+            // Limpiar Flota/Backlog sucios para que el take del video empiece limpio (sin CLI)
+            try {
+              await rrFetch('/api/admin/qa/video-prep', {
+                method: 'POST',
+                body: JSON.stringify({ mode: 'empty' }),
+              });
+              if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+              if (typeof window.actualizarViajesSilencioso === 'function') {
+                await window.actualizarViajesSilencioso();
+              }
+            } catch (_) { /* si falla el wipe, igual cargamos el borrador */ }
+
+            const res = await rrFetch('/api/admin/qa/video-prep?mode=ruta_rapida_draft', { method: 'GET', headers: {} });
+            const data = await res.json().catch(function() { return {}; });
+            if (window._rrDraftLoadSeq !== loadSeq) return;
+            const draft = data && data.draft;
+            if (!draft || !Array.isArray(draft.paradas) || !draft.paradas.length) {
+              document.getElementById('rrParadas').innerHTML = '';
+              agregarParadaRR();
+              return;
+            }
+            document.getElementById('rrParadas').innerHTML = '';
+            document.getElementById('rrDescCarga').value = draft.descripcion_carga || '';
+            document.getElementById('rrCamionListo').checked = draft.camion_listo !== false;
+            var nCamEl = document.getElementById('camionesDisponibles');
+            if (nCamEl) nCamEl.value = '3';
+            var perfilEl = document.getElementById('perfilRuteo');
+            if (perfilEl) {
+              var eq = Array.from(perfilEl.options).find(function(o) {
+                return /equilibrad/i.test(o.text || '');
+              });
+              if (eq) perfilEl.value = eq.value;
+            }
+            window._rrCoordsCacheadas = [];
+            draft.paradas.forEach(function(p) {
+              agregarParadaRR();
+              var el = document.getElementById('rrParadas').lastElementChild;
+              if (!el) return;
+              if (el.querySelector('.rr-cliente')) el.querySelector('.rr-cliente').value = p.cliente || '';
+              if (el.querySelector('.rr-telefono')) el.querySelector('.rr-telefono').value = p.telefono || '';
+              if (el.querySelector('.rr-email')) el.querySelector('.rr-email').value = p.email || '';
+              if (el.querySelector('.rr-peso')) el.querySelector('.rr-peso').value = p.peso_kg != null ? p.peso_kg : '';
+              if (el.querySelector('.rr-volumen')) el.querySelector('.rr-volumen').value = p.volumen != null ? p.volumen : '';
+              if (el.querySelector('.rr-direccion')) {
+                el.querySelector('.rr-direccion').value = p.direccion || '';
+                if (p.lat != null) el.querySelector('.rr-direccion').dataset.lat = String(p.lat);
+                if (p.lng != null) el.querySelector('.rr-direccion').dataset.lng = String(p.lng);
+                el.querySelector('.rr-direccion').dataset.display = p.direccion || '';
+              }
+              if (el.querySelector('.rr-descripcion')) el.querySelector('.rr-descripcion').value = p.descripcion || '';
+              if (el.querySelector('.rr-monto')) el.querySelector('.rr-monto').value = p.monto != null ? p.monto : '';
+              if (el.querySelector('.rr-sla-hora')) el.querySelector('.rr-sla-hora').value = p.sla_hora || '18:00';
+              if (el.querySelector('.rr-ventana-inicio')) el.querySelector('.rr-ventana-inicio').value = p.ventana_inicio || '';
+              var tag = Array.isArray(p.tags) && p.tags[0] ? p.tags[0] : '';
+              if (el.querySelector('.rr-tags')) el.querySelector('.rr-tags').value = tag;
+              el.style.border = '1px solid #10b981';
+              window._rrCoordsCacheadas.push({
+                lat: p.lat, lng: p.lng, display: p.direccion, precision: p.precision || 'house'
+              });
+            });
+            rrEnableDespacho();
+            var btnValidar = document.getElementById('btnValidarRR');
+            if (btnValidar) { btnValidar.disabled = false; btnValidar.textContent = '🔄 Re-validar'; }
+          } catch (e) {
+            if (window._rrDraftLoadSeq !== loadSeq) return;
+            document.getElementById('rrParadas').innerHTML = '';
+            agregarParadaRR();
+          }
+        }
 
         window.cerrarRutaRapida = function() {
           document.getElementById('modalRutaRapida').style.display = 'none';
@@ -7407,7 +8328,9 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           if (window._pollingPausado) {
             window._pollingPausado = false;
             if (typeof window.actualizarViajesSilencioso === 'function') {
+              if (window.viajesRefreshTimer) clearInterval(window.viajesRefreshTimer);
               window.viajesRefreshTimer = setInterval(window.actualizarViajesSilencioso, 5000);
+              window.actualizarViajesSilencioso();
             }
           }
         };
@@ -7428,16 +8351,25 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             '</div>' +
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">' +
             '<input type="email" placeholder="Email (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-email" autocomplete="email">' +
-            '<input type="number" placeholder="Peso kg (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-peso" min="0" step="0.1">' +
+            '<select class="rr-tags" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:13px;background:#1e293b;color:#e2e8f0;" title="Tipo de carga — alimentos y peligrosa no van en el mismo camión">' +
+            '<option value="">Carga general</option>' +
+            '<option value="ALIMENTOS">Alimentos</option>' +
+            '<option value="PELIGROSO">Carga peligrosa</option>' +
+            '</select>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">' +
+            '<input type="number" placeholder="Peso kg" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-peso" min="0" step="0.1">' +
+            '<input type="number" placeholder="Volumen m³" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-volumen" min="0" step="0.1">' +
             '</div>' +
             '<div class="rr-dir-wrap" style="position:relative;margin-bottom:8px;">' +
             '<input type="text" placeholder="Empezá a escribir la dirección..." style="width:100%;padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;box-sizing:border-box;background:#1e293b;color:#e2e8f0;" class="rr-direccion" autocomplete="off" spellcheck="false">' +
             '<div class="rr-ac-list" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;background:#0f172a;border:1px solid #475569;border-radius:8px;max-height:240px;overflow-y:auto;box-shadow:0 16px 32px rgba(0,0,0,0.55);"></div>' +
             '</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;align-items:end;">' +
             '<input type="text" placeholder="Descripción bulto" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-descripcion">' +
             '<input type="number" placeholder="Monto (opcional)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-monto">' +
-            '<input type="number" placeholder="Horas SLA (def: 8)" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-sla" min="1" max="72">' +
+            '<label style="display:flex;flex-direction:column;gap:4px;font-size:0.7rem;color:#94a3b8;font-weight:600;">Ventana desde<input type="time" min="00:00" max="23:59" step="60" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-ventana-inicio" title="Inicio de ventana horaria"></label>' +
+            '<label style="display:flex;flex-direction:column;gap:4px;font-size:0.7rem;color:#94a3b8;font-weight:600;">Hora límite SLA<input type="time" value="18:00" min="00:00" max="23:59" step="60" style="padding:8px;border:1px solid #334155;border-radius:6px;font-size:14px;background:#1e293b;color:#e2e8f0;" class="rr-sla-hora" title="Hora del día (Chile) para cumplir el SLA"></label>' +
             '</div>' +
             (idx > 1 ? '<button onclick="this.parentElement.remove();renumerarParadas()" style="position:absolute;top:8px;right:8px;background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;">✕</button>' : '');
           container.appendChild(div);
@@ -7807,7 +8739,13 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           const camion_listo = document.getElementById('rrCamionListo').checked;
           const descripcion_carga = document.getElementById('rrDescCarga').value.trim();
 
-          if (!chofer_id) { alert('Debes seleccionar un chofer'); return; }
+          if (!chofer_id) {
+            var nCam = parseInt((document.getElementById('camionesDisponibles') || {}).value, 10);
+            if (!Number.isInteger(nCam) || nCam < 2) {
+              alert('Elegí un chofer, o poné N° de camiones ≥ 2 en el header (modo equilibrado) para partir la flota.');
+              return;
+            }
+          }
 
           const paradaEls = document.getElementById('rrParadas').children;
           const paradas = [];
@@ -7821,9 +8759,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               telefono: el.querySelector('.rr-telefono')?.value.trim() || null,
               email: el.querySelector('.rr-email')?.value.trim() || null,
               peso_kg: parseFloat(el.querySelector('.rr-peso')?.value) || 0,
+              volumen: parseFloat(el.querySelector('.rr-volumen')?.value) || 0,
               descripcion: el.querySelector('.rr-descripcion')?.value.trim() || null,
               monto: parseFloat(el.querySelector('.rr-monto')?.value) || 0,
-              sla_horas: parseInt(el.querySelector('.rr-sla')?.value) || 8,
+              sla_hora: el.querySelector('.rr-sla-hora')?.value || '18:00',
+              ventana_inicio: el.querySelector('.rr-ventana-inicio')?.value || null,
+              tags: (function() {
+                var t = el.querySelector('.rr-tags')?.value;
+                return t ? [t] : [];
+              })(),
             });
           }
 
@@ -7849,11 +8793,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             const res = await rrFetch('/api/quick-route', {
               method: 'POST',
               body: JSON.stringify({
-                chofer_id: chofer_id,
+                chofer_id: chofer_id || null,
                 camion_listo,
                 descripcion_carga,
                 paradas,
-                depot_id: (document.getElementById('depotRuteo') || {}).value || null
+                depot_id: (document.getElementById('depotRuteo') || {}).value || null,
+                flota_disponible: parseInt((document.getElementById('camionesDisponibles') || {}).value, 10) || 1,
+                perfil_id: (document.getElementById('perfilRuteo') || {}).value || 1,
+                clima: (document.getElementById('climaRuteo') || {}).value || 'NORMAL',
               })
             });
             const data = await res.json().catch(function() { return {}; });
@@ -7870,16 +8817,32 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               var kmStr = data.km_totales ? data.km_totales + ' km' : 'N/D';
               var costoStr = data.costo_operativo ? '$' + Number(data.costo_operativo).toLocaleString('es-CL') : 'N/D';
               var nl = String.fromCharCode(10);
+              var nViajes = data.viajes_creados || 1;
               alert('✅ Ruta creada exitosamente' + nl + nl +
-                'ID: ' + data.trip_id + nl +
+                (data.split_fleet ? ('Viajes: ' + nViajes + ' camiones' + nl) : ('ID: ' + data.trip_id + nl)) +
                 'Chofer: ' + data.chofer + nl +
                 'Paradas: ' + data.paradas_creadas + nl +
                 '📍 Distancia estimada: ' + kmStr + nl +
                 '💰 Costo operativo: ' + costoStr);
-              // Actualizar el panel sin recargar toda la página
-              if (typeof actualizarViajesSilencioso === 'function') {
-                actualizarViajesSilencioso();
+              // Refrescar flota/backlog/mapa sin recargar (usar window.*: esta fn vive en otro scope)
+              if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+              var refreshFn = typeof window.actualizarViajesSilencioso === 'function'
+                ? window.actualizarViajesSilencioso
+                : null;
+              if (refreshFn) {
+                try { await refreshFn(); } catch (_) { /* ignore */ }
+                // Segundo pase corto: el insert/optimizador a veces termina un tick después
+                setTimeout(function() {
+                  if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
+                  if (typeof window.actualizarViajesSilencioso === 'function') {
+                    window.actualizarViajesSilencioso();
+                  }
+                }, 800);
               }
+              // Si se crearon viajes, mostrar Flota; si quedaron pendientes, Backlog
+              var targetTab = (Number(nViajes) > 0) ? 'panel-flota' : 'panel-backlog';
+              var tabBtn = document.querySelector('.tab-btn[data-target="' + targetTab + '"]');
+              if (tabBtn) tabBtn.click();
             } else {
               alert('Error: ' + (data.error || 'Error desconocido'));
               // Reactivar botón de despacho si el error fue del servidor (no de validación)
@@ -7898,13 +8861,14 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
         };
 
-        // Inicializar con 1 parada vacía al abrir
         var modalRR = document.getElementById('modalRutaRapida');
         if (modalRR) {
-          // Cerrar al hacer click en el fondo oscuro
           modalRR.addEventListener('click', function(e) {
             if (e.target === this) cerrarRutaRapida();
           });
+        }
+        if (/[?&]video=rr(?:&|$)/.test(String(location.search || ''))) {
+          setTimeout(function() { window.abrirRutaRapida({ fromVideo: true }); }, 800);
         }
 
         // Cerrar con ESC — reactiva el polling igual que cerrarRutaRapida()
@@ -7944,7 +8908,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             var data = await res.json().catch(function() { return {}; });
             if (data.exito) {
               // Actualizar panel sin recargar — el filtro de terminales lo ocultará
-              if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso();
+              if (typeof window.actualizarViajesSilencioso === 'function') window.actualizarViajesSilencioso();
             } else {
               alert('Error al cancelar: ' + (data.error || ('HTTP ' + res.status)));
             }
@@ -7992,7 +8956,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
               setTimeout(function() {
                 cerrarEditarDireccion();
-                if (typeof actualizarViajesSilencioso === 'function') actualizarViajesSilencioso();
+                if (typeof window.actualizarViajesSilencioso === 'function') window.actualizarViajesSilencioso();
               }, 1500);
             } else {
               resultado.innerHTML = '<span style="color:#ef4444">❌ ' + (data.error || 'Error desconocido') + '</span>';
@@ -8005,6 +8969,167 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }
         };
         // ── /Modal Editar Dirección ────────────────────────────────────────
+
+        
+        (function initBodegaTab() {
+          if (!CONFIG.wms_enabled) return;
+          var panel = document.getElementById('panel-bodega');
+          if (!panel) return;
+
+          function esc(s) {
+            return String(s == null ? '' : s)
+              .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          }
+
+          function qty(n) {
+            var v = Number(n);
+            if (!Number.isFinite(v)) return '0';
+            return v % 1 === 0 ? String(v) : v.toFixed(1);
+          }
+
+          async function api(path, opts) {
+            var res = await fetch(path, Object.assign({ credentials: 'same-origin' }, opts || {}));
+            var data = await res.json().catch(function () { return {}; });
+            if (!res.ok) throw new Error(data.error || data.code || ('HTTP ' + res.status));
+            return data;
+          }
+
+          function render(data) {
+            var bajo = data.stock_bajo || [];
+            var cola = data.cola || [];
+            var listas = data.listas_sin_trip || [];
+            var stock = data.stock || [];
+            var depots = data.depots || CONFIG.depots || [];
+            var depotOpts = depots.map(function (d) {
+              return '<option value="' + esc(d.depot_id) + '">' + esc(d.nombre || d.depot_id) + '</option>';
+            }).join('');
+
+            var alertas = '';
+            if (bajo.length) {
+              alertas += '<div class="bodega-alert bodega-alert-warn"><b>Stock bajo (' + bajo.length + ')</b><ul>' +
+                bajo.map(function (s) {
+                  return '<li>' + esc(s.sku) + ' · ' + esc(s.nombre || '') + ' — disp. ' + qty(s.qty_disponible) +
+                    ' / mín. ' + qty(s.qty_minima) + '</li>';
+                }).join('') + '</ul></div>';
+            }
+            if (data.quiebres && data.quiebres.length) {
+              alertas += '<div class="bodega-alert bodega-alert-danger"><b>Quiebre (' + data.quiebres.length + ')</b> — no ruteables.</div>';
+            }
+            if (listas.length) {
+              alertas += '<div class="bodega-alert bodega-alert-ok"><b>Listas sin camión (' + listas.length + ')</b> — ya están en Pedidos pendientes.</div>';
+            }
+            if (!alertas) alertas = '<div class="bodega-alert">Sin alertas de stock.</div>';
+
+            var colaHtml = cola.length === 0
+              ? '<p class="bodega-muted">Sin OTs en picking/packing/quiebre.</p>'
+              : cola.map(function (o) {
+                  var btns = '';
+                  if (o.estado_operacional === 'PENDIENTE_PICKING' || o.estado_operacional === 'PICKING') {
+                    btns = '<button class="btn-bodega" data-act="picking" data-ot="' + esc(o.ot_id) + '">Pickeado</button>';
+                  } else if (o.estado_operacional === 'PACKING') {
+                    btns = '<button class="btn-bodega btn-bodega-ok" data-act="packing" data-ot="' + esc(o.ot_id) + '">Empacado / listo</button>';
+                  }
+                  var lineas = (o.lineas || []).map(function (l) {
+                    return esc(l.sku) + ' × ' + qty(l.qty);
+                  }).join(', ');
+                  return '<div class="bodega-ot">' +
+                    '<div><b>' + esc(o.ot_id) + '</b> · ' + esc(o.cliente || '') +
+                    '<div class="bodega-muted">' + esc(o.estado_operacional) + (lineas ? ' · ' + lineas : '') + '</div></div>' +
+                    btns + '</div>';
+                }).join('');
+
+            var stockHtml = stock.slice(0, 80).map(function (s) {
+              var cls = s.stock_bajo ? ' bodega-row-warn' : '';
+              return '<tr class="' + cls + '"><td>' + esc(s.sku) + '</td><td>' + esc(s.nombre || '') +
+                '</td><td>' + qty(s.qty_disponible) + '</td><td>' + qty(s.qty_reservada) +
+                '</td><td>' + qty(s.qty_minima) + '</td><td>' + esc(s.ubicacion || '—') + '</td></tr>';
+            }).join('');
+
+            panel.innerHTML =
+              '<div class="bodega-wrap">' +
+              '<div class="bodega-counts">Bajo: ' + (data.counts && data.counts.stock_bajo || 0) +
+              ' · Cola: ' + (data.counts && data.counts.cola || 0) +
+              ' · Listas: ' + (data.counts && data.counts.listas_sin_trip || 0) + '</div>' +
+              alertas +
+              '<h4 class="bodega-h">Cola de procesos</h4>' + colaHtml +
+              '<h4 class="bodega-h">Alta SKU</h4>' +
+              '<form id="bodegaAltaForm" class="bodega-form">' +
+              '<select name="depot_id">' + depotOpts + '</select>' +
+              '<input name="sku" placeholder="SKU" required maxlength="64">' +
+              '<input name="nombre" placeholder="Nombre" required maxlength="256">' +
+              '<input name="qty_inicial" type="number" step="0.001" min="0" placeholder="Stock inicial" value="0">' +
+              '<input name="qty_minima" type="number" step="0.001" min="0" placeholder="Mínimo" value="0">' +
+              '<input name="ubicacion" placeholder="Ubicación (B-3-12)" maxlength="64">' +
+              '<button type="submit" class="btn-bodega btn-bodega-ok">Guardar</button>' +
+              '</form>' +
+              '<h4 class="bodega-h">Inventario</h4>' +
+              '<table class="bodega-table"><thead><tr><th>SKU</th><th>Nombre</th><th>Disp.</th><th>Res.</th><th>Mín.</th><th>Ubic.</th></tr></thead>' +
+              '<tbody>' + (stockHtml || '<tr><td colspan="6" class="bodega-muted">Sin SKUs aún.</td></tr>') + '</tbody></table>' +
+              '<p class="bodega-muted">Reservar una OT: POST /api/bodega/reservar con ot_id, depot_id y lineas[{sku,qty}].</p>' +
+              '</div>';
+          }
+
+          async function load() {
+            try {
+              var data = await api('/api/bodega/resumen');
+              render(data);
+              var badge = document.querySelector('.tab-btn[data-target="panel-bodega"]');
+              if (badge) {
+                var n = (data.counts && (data.counts.stock_bajo + data.counts.quiebres)) || 0;
+                badge.textContent = n > 0 ? 'Bodega (' + n + ')' : 'Bodega';
+              }
+            } catch (e) {
+              panel.innerHTML = '<p class="bodega-muted">No se pudo cargar bodega: ' + esc(e.message) + '</p>';
+            }
+          }
+
+          panel.addEventListener('click', async function (e) {
+            var btn = e.target.closest('[data-act]');
+            if (!btn) return;
+            var ot = btn.getAttribute('data-ot');
+            var act = btn.getAttribute('data-act');
+            btn.disabled = true;
+            try {
+              await api('/api/bodega/' + act, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ot_id: ot })
+              });
+              await load();
+            } catch (err) {
+              alert(err.message);
+              btn.disabled = false;
+            }
+          });
+
+          panel.addEventListener('submit', async function (e) {
+            if (e.target.id !== 'bodegaAltaForm') return;
+            e.preventDefault();
+            var fd = new FormData(e.target);
+            try {
+              await api('/api/bodega/productos', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  depot_id: fd.get('depot_id'),
+                  sku: fd.get('sku'),
+                  nombre: fd.get('nombre'),
+                  qty_inicial: Number(fd.get('qty_inicial') || 0),
+                  qty_minima: Number(fd.get('qty_minima') || 0),
+                  ubicacion: fd.get('ubicacion') || null
+                })
+              });
+              await load();
+            } catch (err) {
+              alert(err.message);
+            }
+          });
+
+          load();
+          setInterval(function () {
+            if (typeof appState !== 'undefined' && appState.activeTab === 'panel-bodega') load();
+          }, 20000);
+        })();
 
       </script>
 
@@ -8022,9 +9147,9 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
             <div>
-              <label style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:6px;">Chofer *</label>
+              <label style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;margin-bottom:6px;">Chofer (opcional)</label>
               <select id="rrChofer" style="width:100%;padding:10px;border:1px solid #334155;border-radius:8px;font-size:14px;background:#0f172a;color:#e2e8f0;">
-                <option value="">-- Seleccionar chofer --</option>
+                <option value="">-- Auto: usar N° de camiones del header --</option>
               </select>
             </div>
             <div>
@@ -8099,7 +9224,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             <button type="button" onclick="cerrarModalRecalcularRuteo()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#64748b;">✕</button>
           </div>
           <p id="recalcResumenValores" style="font-size:12px;color:#94a3b8;margin:0 0 12px 0;"></p>
-          <p style="font-size:13px;color:#cbd5e1;margin:0 0 10px 0;">Elegí qué viajes recalcular. Solo aparecen los que <strong>todavía no salieron</strong>. Los demás no se tocan.</p>
+          <p style="font-size:13px;color:#cbd5e1;margin:0 0 10px 0;">Elegí qué viajes recalcular. Solo aparecen los que <strong>todavía no salieron</strong>. El perfil, el clima y el <strong>N° de camiones</strong> del header se aplican a esas rutas (parte o junta). Un chofer de un viaje no marcado no se usa.</p>
           <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
             <button type="button" onclick="marcarTodosRecalcTrips(true)" style="padding:5px 10px;border:1px solid #334155;border-radius:6px;background:#0f172a;color:#94a3b8;cursor:pointer;font-size:12px;">Todas</button>
             <button type="button" onclick="marcarTodosRecalcTrips(false)" style="padding:5px 10px;border:1px solid #334155;border-radius:6px;background:#0f172a;color:#94a3b8;cursor:pointer;font-size:12px;">Ninguna</button>

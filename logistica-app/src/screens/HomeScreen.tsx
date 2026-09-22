@@ -13,6 +13,7 @@ import { uploadEvidencePhoto } from '../services/evidence';
 import ScanOtModal from '../components/ScanOtModal';
 import SignaturePad from '../components/SignaturePad';
 import { API_BASE_URL } from '../config/api';
+import { POD_SCAN_ENABLED } from '../config/features';
 
 type StopStatus = 'BLOQUEADA' | 'ACTIVA' | 'EN_SITIO' | 'COMPLETADA' | 'PROBLEMA';
 type EventResult = 'ok' | 'queued' | 'failed';
@@ -34,18 +35,30 @@ interface StopInfo {
   pod_requirements?: PodRequirements;
 }
 
-const DEFAULT_POD: PodRequirements = { foto: true, firma: true, scan: true, notas: false };
+const DEFAULT_POD: PodRequirements = {
+  foto: true,
+  firma: true,
+  scan: POD_SCAN_ENABLED,
+  notas: false,
+};
 
 function resolveStopPod(stop?: StopInfo | null): PodRequirements {
   const p = stop?.pod_requirements;
-  if (!p || typeof p !== 'object') return DEFAULT_POD;
-  return {
-    foto: p.foto !== false,
-    firma: p.firma !== false,
-    scan: p.scan !== false,
-    notas: !!p.notas,
-  };
+  const base = !p || typeof p !== 'object'
+    ? DEFAULT_POD
+    : {
+        foto: p.foto !== false,
+        firma: p.firma !== false,
+        scan: p.scan !== false,
+        notas: !!p.notas,
+      };
+  if (!POD_SCAN_ENABLED) {
+    return { ...base, scan: false };
+  }
+  return base;
 }
+
+const CAPTURE_COORDS_TIMEOUT_MS = 7000;
 
 async function captureCoords(): Promise<{ latitud: number; longitud: number } | null> {
   try {
@@ -54,9 +67,14 @@ async function captureCoords(): Promise<{ latitud: number; longitud: number } | 
       const req = await Location.requestForegroundPermissionsAsync();
       if (req.status !== 'granted') return null;
     }
-    const pos = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
-    });
+    // expo-location no tiene opción de timeout nativa — sin este race, un GPS
+    // sin fix (ej. dentro de una bodega) cuelga la confirmación de entrega
+    // indefinidamente. Mejor seguir sin coords que trabar al chofer.
+    const pos = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), CAPTURE_COORDS_TIMEOUT_MS)),
+    ]);
+    if (!pos) return null;
     return {
       latitud: pos.coords.latitude,
       longitud: pos.coords.longitude,
@@ -68,7 +86,7 @@ async function captureCoords(): Promise<{ latitud: number; longitud: number } | 
 
 export default function HomeScreen() {
   const { tenantId, rut, driverName, token, logout } = useAuthStore();
-  const { addAction, setCurrentTrip, queue, isSyncing, retryFailed, processQueue } = useSyncStore();
+  const { addAction, setCurrentTrip, queue, isSyncing, retryFailed, processQueue, locationError, setLocationError } = useSyncStore();
   const failedQueue = queue.filter((a) => a.failed);
   const pendingQueue = queue.filter((a) => !a.failed);
   
@@ -323,7 +341,7 @@ export default function HomeScreen() {
 
     const tripId = viajes[0].trip_id;
     const nuevosViajes = [...viajes];
-    nuevosViajes[0].estado = 'EN_RUTA';
+    nuevosViajes[0] = { ...nuevosViajes[0], estado: 'EN_RUTA' };
     setViajes(nuevosViajes);
 
     // Persistencia inmediata (no solo cola): dispara guía Res.154 en el Worker
@@ -731,7 +749,9 @@ export default function HomeScreen() {
                   {(() => {
                     const pod = resolveStopPod(item);
                     if (!pod.foto && !pod.firma && !pod.scan) return 'Confirmar entrega ✓';
-                    return 'Escanear y entregar 📦';
+                    if (pod.scan) return 'Escanear y entregar 📦';
+                    if (pod.foto) return 'Foto de entrega 📸';
+                    return 'Confirmar entrega ✓';
                   })()}
                 </Text>
               </TouchableOpacity>
@@ -777,6 +797,17 @@ export default function HomeScreen() {
         </View>
       ) : (
         <>
+          {locationError ? (
+            <View style={styles.syncBannerFail}>
+              <Text style={styles.syncBannerText}>
+                📍 GPS en pausa: {locationError}
+              </Text>
+              <TouchableOpacity onPress={() => setLocationError(null)} style={styles.syncBannerBtn}>
+                <Text style={styles.syncBannerBtnText}>Ocultar</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {failedQueue.length > 0 ? (
             <View style={styles.syncBannerFail}>
               <Text style={styles.syncBannerText}>

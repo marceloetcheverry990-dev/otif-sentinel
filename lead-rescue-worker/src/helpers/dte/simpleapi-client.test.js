@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { IND_TRASLADO_SII, mapPayloadToSimpleAPI } from './simpleapi-client.js';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { IND_TRASLADO_SII, mapPayloadToSimpleAPI, lookupGuiaByReferencia } from './simpleapi-client.js';
 
 describe('mapPayloadToSimpleAPI', () => {
   it('mapea campos Res.154 al cuerpo SimpleAPI', () => {
@@ -34,6 +34,35 @@ describe('mapPayloadToSimpleAPI', () => {
     expect(body.transporte.comunaDestino).toBe('Maipu');
     expect(body.emisor.rut).toBe('76.123.456-7');
     expect(body.referenciaExterna).toBe('empresa_base:OT-9:T1');
+  });
+
+  it('lookupGuiaByReferencia busca por la MISMA referenciaExterna que se usó al emitir (evita reemisión duplicada)', async () => {
+    const payload = { tenant_id: 'empresa_base', ot_id: 'OT-9', trip_id: 'T1' };
+    const env = {
+      SIMPLEAPI_TOKEN: 'tok',
+      SIMPLEAPI_LOOKUP_PATH: '/api/dte/guia-despacho/by-ref',
+      SIMPLEAPI_BASE_URL: 'https://api.simpleapi.cl',
+      DTE_RUT_EMISOR: '76.123.456-7',
+      DTE_RAZON_SOCIAL: 'Demo SpA',
+    };
+    const emittedRef = mapPayloadToSimpleAPI(
+      { ...payload, tipo_traslado: 'VENTA' },
+      env
+    ).referenciaExterna;
+
+    let capturedUrl = null;
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      capturedUrl = url;
+      return { ok: true, json: async () => ({}) };
+    }));
+
+    await lookupGuiaByReferencia(payload, env);
+
+    expect(capturedUrl).toContain(encodeURIComponent(emittedRef));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('S10: DEVOLUCION→7 y OTRO→6', () => {

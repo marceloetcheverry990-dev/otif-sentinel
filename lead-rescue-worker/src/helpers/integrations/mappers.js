@@ -24,6 +24,54 @@ function firstNonEmpty(...vals) {
   return null;
 }
 
+// Deben coincidir con OrderIngestItemSchema.lineas (config.js): si se exceden,
+// zod rechaza el batch completo, no solo la orden.
+const MAX_LINEAS = 100;
+const MAX_SKU_LEN = 64;
+
+/**
+ * Líneas nativas de la plataforma → lineas canónicas [{sku, qty}] para la
+ * reserva de bodega. Mergea SKUs repetidos.
+ *
+ * - Líneas sin SKU (común en Shopify/Square) se saltan con warning: no pueden
+ *   estar en el catálogo de bodega. Se reservan las que sí son identificables.
+ * - Devuelve undefined (no []) si no queda ninguna: la orden sigue el camino
+ *   sin WMS (PENDIENTE_RUTEO directo).
+ * - Más de MAX_LINEAS SKUs distintos: se omite la reserva con warning en vez
+ *   de hacer fallar el batch entero en la validación.
+ */
+function extractLineas(rawLines, { sku, qty, skip }, warnings, otId) {
+  if (!Array.isArray(rawLines) || rawLines.length === 0) return undefined;
+  const porSku = new Map();
+  let sinSku = 0;
+  for (const l of rawLines) {
+    if (!l || typeof l !== 'object') continue;
+    if (skip && skip(l)) continue;
+    const q = Number(qty(l));
+    if (!Number.isFinite(q) || q <= 0) continue;
+    const s = firstNonEmpty(...sku(l));
+    if (!s || s.length > MAX_SKU_LEN) {
+      sinSku += 1;
+      continue;
+    }
+    porSku.set(s, (porSku.get(s) || 0) + q);
+  }
+  if (sinSku) warnings.push(`lineas_sin_sku:${otId}:${sinSku}`);
+  if (porSku.size === 0) return undefined;
+  if (porSku.size > MAX_LINEAS) {
+    warnings.push(`lineas_excedidas:${otId}:${porSku.size}`);
+    return undefined;
+  }
+  return Array.from(porSku, ([s, q]) => ({ sku: s, qty: q }));
+}
+
+/** OData suele envolver colecciones en { results: [...] }. */
+function odataList(v) {
+  if (Array.isArray(v)) return v;
+  if (v && Array.isArray(v.results)) return v.results;
+  return undefined;
+}
+
 /**
  * Shopify Admin REST / webhook orders/create|updated
  * https://shopify.dev/docs/api/admin-rest/latest/resources/order
@@ -79,6 +127,12 @@ export function mapShopifyPayload(payload) {
         external_ref: order.id != null ? String(order.id) : undefined,
         telefono: firstNonEmpty(ship.phone, order.phone) || undefined,
         email: firstNonEmpty(order.email, order.customer?.email) || undefined,
+        // current_quantity descuenta ítems quitados/reembolsados (0 = línea eliminada).
+        lineas: extractLineas(order.line_items, {
+          sku: (l) => [l.sku],
+          qty: (l) => (typeof l.current_quantity === 'number' ? l.current_quantity : l.quantity),
+          skip: (l) => l.requires_shipping === false || l.gift_card === true,
+        }, warnings, ot_id),
       },
     ],
     warnings,
@@ -132,6 +186,10 @@ export function mapWooCommercePayload(payload) {
         external_ref: order.id != null ? String(order.id) : undefined,
         telefono: firstNonEmpty(ship.phone, order.billing?.phone) || undefined,
         email: firstNonEmpty(order.billing?.email, order.email) || undefined,
+        lineas: extractLineas(order.line_items, {
+          sku: (l) => [l.sku],
+          qty: (l) => l.quantity,
+        }, warnings, ot_id),
       },
     ],
     warnings,
@@ -213,6 +271,24 @@ export function mapSapPayload(payload) {
       requires_hazmat: !!(row.DangerousGoods || row.hazmat || row.requires_hazmat),
       tags_requeridos: Array.isArray(row.tags_requeridos) ? row.tags_requeridos : undefined,
       depot_id: row.ShippingPoint || row.Plant || row.depot_id || undefined,
+      // OData entrega (to_DeliveryDocumentItem) / pedido (to_Item), IDoc
+      // (MATNR + LFIMG cant. entrega / KWMENG cant. pedido) o JSON simple.
+      // El SKU se usa tal cual (con ceros a la izquierda si SAP los manda):
+      // tiene que coincidir exacto con el catálogo de bodega.
+      lineas: extractLineas(
+        odataList(row.to_DeliveryDocumentItem)
+          || odataList(row.to_Item)
+          || odataList(row.items)
+          || odataList(row.Items)
+          || odataList(row.lineas),
+        {
+          sku: (l) => [l.Material, l.MATNR, l.Product, l.sku],
+          qty: (l) => l.ActualDeliveryQuantity ?? l.OrderQuantity ?? l.RequestedQuantity
+            ?? l.LFIMG ?? l.KWMENG ?? l.Quantity ?? l.qty,
+        },
+        warnings,
+        ot_id
+      ),
     });
   }
 
@@ -275,6 +351,22 @@ export function mapNetSuitePayload(payload) {
       external_ref: row.id != null ? String(row.id) : String(ot_id),
       telefono: ship.addrPhone || row.phone || undefined,
       email: ship.email || row.email || undefined,
+      // Sublista de productos: item.items (REST) / itemList.item (SOAP).
+      // No usar row.items: en este mapper `items` en la raíz es un lote de pedidos.
+      lineas: extractLineas(
+        odataList(row.item?.items) || odataList(row.itemList?.item)
+          || odataList(row.lines) || odataList(row.lineas),
+        {
+          sku: (l) => [
+            l.itemid, l.sku, l.itemId,
+            l.item?.refName, l.item?.name,
+            typeof l.item === 'string' ? l.item : null,
+          ],
+          qty: (l) => l.quantity ?? l.qty,
+        },
+        warnings,
+        ot_id
+      ),
     });
   }
 
@@ -353,6 +445,17 @@ export function mapPosPayload(payload) {
       external_ref: String(ot_id),
       telefono: ful.phone_number || row.phone || undefined,
       email: ful.email || row.email || row.customer_email || undefined,
+      // Square no trae SKU en line_items (vive en el catálogo): esas líneas
+      // caen en lineas_sin_sku salvo que el POS lo agregue (sku / item_sku).
+      lineas: extractLineas(
+        odataList(row.line_items) || odataList(row.items) || odataList(row.lineas),
+        {
+          sku: (l) => [l.sku, l.item_sku, l.variation?.sku],
+          qty: (l) => l.quantity ?? l.qty,
+        },
+        warnings,
+        ot_id
+      ),
     });
   }
 

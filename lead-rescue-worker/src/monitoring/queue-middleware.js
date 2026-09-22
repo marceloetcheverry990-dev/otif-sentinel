@@ -57,13 +57,20 @@ import { withDb } from '../db.js';
 export async function getDLQDepth(env, queueName = null) {
   try {
     return await withDb(env, async (client) => {
-      let query = 'SELECT COUNT(*) as count FROM dead_letter_events';
+      // Ventana de 1h — misma convención que checkDLQCount (alerts.js). Sin
+      // esto el conteo crece para siempre y el umbral, una vez superado,
+      // queda superado por el resto de la vida de la tabla.
+      // Filtro por event_type, no por metadata->>'queue': dead_letter_events
+      // no tiene columna metadata (columnas reales: id, ot_id, trace_id,
+      // event_type, payload, reason, error_detail, died_at, tenant_id) — el
+      // filtro anterior lanzaba un error de columna inexistente en cada
+      // llamada con queueName, silenciado por el catch de abajo (devolvía 0).
+      let query = `SELECT COUNT(*) as count FROM dead_letter_events WHERE died_at > NOW() - INTERVAL '1 hour'`;
       const params = [];
 
-      // Filter by queue name if provided
       if (queueName) {
-        query += ' WHERE metadata->>\'queue\' = $1';
         params.push(queueName);
+        query += ` AND event_type = $${params.length}`;
       }
 
       const result = await client.query(query, params);
@@ -148,11 +155,13 @@ export async function recordDLQMetrics(env, ctx, queueName = null) {
 export async function getCircuitBreakerStates(env) {
   try {
     return await withDb(env, async (client) => {
-      // Query circuit breaker flags
+      // system_flags real: columnas key/value/expires_at (no flag_key/flag_value
+      // — esas no existen en el schema; ver queues.js processEnrichmentQueue,
+      // que es quien realmente escribe/lee este breaker).
       const result = await client.query(`
-        SELECT flag_key, flag_value
+        SELECT key, value, expires_at
         FROM system_flags
-        WHERE flag_key IN ('openai_breaker', 'tg_breaker')
+        WHERE key IN ('openai_breaker', 'tg_breaker')
       `);
 
       const states = {
@@ -161,8 +170,10 @@ export async function getCircuitBreakerStates(env) {
       };
 
       for (const row of result.rows) {
-        // Flag value 'true' means circuit is OPEN (blocking requests)
-        states[row.flag_key] = row.flag_value === 'true';
+        // value='OPEN' bloquea requests solo mientras no haya vencido expires_at
+        // (mismo criterio que processEnrichmentQueue al resetear el breaker).
+        const notExpired = row.expires_at && new Date(row.expires_at).getTime() > Date.now();
+        states[row.key] = row.value === 'OPEN' && Boolean(notExpired);
       }
 
       return states;

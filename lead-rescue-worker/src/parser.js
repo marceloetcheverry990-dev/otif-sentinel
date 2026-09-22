@@ -4,6 +4,16 @@ const csv = require('csv-parser');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
+// Script standalone con service-role key (bypassa RLS): --tenant es obligatorio.
+// tenant_id en ordenes_pendientes tiene DEFAULT 'empresa_base' — sin esto, el
+// script importa SIEMPRE a ese tenant sin importar de qué cliente sea el CSV.
+const TENANT_ARG = process.argv.find((a) => a.startsWith('--tenant='));
+const TENANT_ID = TENANT_ARG ? TENANT_ARG.slice('--tenant='.length).trim() : null;
+if (!TENANT_ID) {
+  console.error('❌ Falta --tenant=<tenant_id>. Sin esto, ordenes_pendientes.tenant_id cae al DEFAULT (empresa_base) sin importar el origen real del CSV.');
+  process.exit(1);
+}
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -15,7 +25,7 @@ const LOTE_IMPORTACION = crypto.randomUUID();
 const guiasExitosas = [];
 const guiasConError = [];
 
-console.log(`🚀 OTIF Sentinel Import V5 - Iniciando...`);
+console.log(`🚀 OTIF Sentinel Import V5 - Iniciando... (tenant=${TENANT_ID})`);
 console.log(`📦 Lote de seguridad: ${LOTE_IMPORTACION}`);
 
 function extraerAnio(fechaStr) {
@@ -63,6 +73,7 @@ fs.createReadStream(NOMBRE_ARCHIVO)
             const linkDTE = fila.uri || fila.link || '';
 
             const otLimpia = {
+                tenant_id: TENANT_ID,
                 ot_id: `OT-${year}-${folioLimpio}`,
                 cliente: clienteRaw.trim(),
                 valor_oc_clp: limpiarMonto(montoRaw),

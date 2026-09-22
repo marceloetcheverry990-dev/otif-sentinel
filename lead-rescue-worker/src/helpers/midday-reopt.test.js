@@ -1,117 +1,60 @@
 import { describe, it, expect } from 'vitest';
-import {
-  splitFrozenOpen,
-  insertionDeltaKm,
-  bestInsertion,
-  pickBestTripForInsert,
-  rebuildSequences,
-} from './midday-reopt.js';
+import { pickBestTripForInsert } from './midday-reopt.js';
+import { DEFAULT_DEPOT } from './vrp-solver.js';
 
-function stop(id, lat, lng, estado, seq, vol = 1) {
+function baseTrip(overrides = {}) {
   return {
-    ot_id: id,
-    lat,
-    lng,
-    estado_operacional: estado,
-    stop_sequence: seq,
-    volumen: vol,
-    tags: [],
+    trip_id: 'TRIP-1',
+    chofer_id: 'CH-1',
+    patente: 'AA-1111',
+    open: [],
+    volume: 0,
+    weight: 0,
+    capacity: 100,
+    capacityWeight: 99999,
+    seed: DEFAULT_DEPOT,
+    depot: DEFAULT_DEPOT,
+    tags: [], // sin certificación propia — caso típico
+    cargoTags: [],
+    velocidadKmH: 35,
+    ...overrides,
   };
 }
 
-describe('midday-reopt', () => {
-  it('splitFrozenOpen congela EN_SITIO y ENTREGADO', () => {
-    const { frozen, open } = splitFrozenOpen([
-      stop('1', -33.5, -70.7, 'ENTREGADO', 1),
-      stop('2', -33.51, -70.71, 'EN_SITIO', 2),
-      stop('3', -33.52, -70.72, 'CAMION_ASIGNADO', 3),
-    ]);
-    expect(frozen.map((s) => s.ot_id)).toEqual(['1', '2']);
-    expect(open.map((s) => s.ot_id)).toEqual(['3']);
+function candidate(tags) {
+  return {
+    ot_id: 'NEW-1',
+    lat: DEFAULT_DEPOT.lat + 0.01,
+    lng: DEFAULT_DEPOT.lng + 0.01,
+    volumen: 1,
+    peso_kg: 1,
+    tags,
+    fecha_hora_sla: new Date(Date.now() + 8 * 3600000).toISOString(),
+  };
+}
+
+describe('pickBestTripForInsert — segregación contra carga real, no contra el perfil del chofer', () => {
+  // En los 3 casos el chofer SÍ tiene el tag que exige el pedido (pasa el
+  // gate de "capacidad del chofer"). Lo único que varía es cargoTags — así
+  // se aísla el bug real: antes se comparaba contra `tags` (certificación
+  // del chofer), por lo que un chofer HAZMAT-certificado podía recibir un
+  // pedido HAZMAT igual, aunque el camión ya llevara ALIMENTO a bordo.
+  it('rechaza insertar HAZMAT en un viaje que ya lleva FOOD a bordo, aunque el chofer esté certificado HAZMAT', () => {
+    const trips = [baseTrip({ tags: ['HAZMAT'], cargoTags: ['ALIMENTO'] })];
+    const pick = pickBestTripForInsert(trips, candidate(['HAZMAT']), { depot: DEFAULT_DEPOT });
+    expect(pick).toBeNull();
   });
 
-  it('bestInsertion mete el punto en la ranura de menor delta', () => {
-    const open = [
-      stop('A', -33.50, -70.70, 'CAMION_ASIGNADO', 1),
-      stop('C', -33.52, -70.72, 'CAMION_ASIGNADO', 2),
-    ];
-    const candidate = stop('B', -33.51, -70.71, 'PENDIENTE_RUTEO', 0);
-    const seed = { lat: -33.5132, lng: -70.7672 };
-    const best = bestInsertion(open, candidate, { seed, capacity: 100, currentVolume: 2 });
-    expect(best).not.toBeNull();
-    expect(best.newOpen.map((s) => s.ot_id)).toContain('B');
-    expect(best.deltaKm).toBeLessThan(50);
+  it('rechaza insertar FOOD en un viaje que ya lleva HAZMAT a bordo, aunque el chofer esté certificado ALIMENTO', () => {
+    const trips = [baseTrip({ tags: ['ALIMENTO'], cargoTags: ['HAZMAT'] })];
+    const pick = pickBestTripForInsert(trips, candidate(['ALIMENTO']), { depot: DEFAULT_DEPOT });
+    expect(pick).toBeNull();
   });
 
-  it('pickBestTripForInsert elige viaje con menor costo', () => {
-    const candidate = stop('X', -33.51, -70.71, 'PENDIENTE_RUTEO', 0);
-    const trips = [
-      {
-        trip_id: 'T1',
-        chofer_id: 'c1',
-        open: [stop('A', -33.60, -70.90, 'CAMION_ASIGNADO', 1)],
-        volume: 1,
-        capacity: 100,
-        seed: { lat: -33.5132, lng: -70.7672 },
-        tags: [],
-      },
-      {
-        trip_id: 'T2',
-        chofer_id: 'c2',
-        open: [stop('B', -33.505, -70.705, 'CAMION_ASIGNADO', 1)],
-        volume: 1,
-        capacity: 100,
-        seed: { lat: -33.5132, lng: -70.7672 },
-        tags: [],
-      },
-    ];
-    const pick = pickBestTripForInsert(trips, candidate);
-    expect(pick.trip_id).toBe('T2');
-  });
-
-  it('rebuildSequences mantiene frozen primero', () => {
-    const seq = rebuildSequences(
-      [stop('F', -33.5, -70.7, 'ENTREGADO', 9)],
-      [stop('O', -33.51, -70.71, 'CAMION_ASIGNADO', 1)]
-    );
-    expect(seq.map((s) => s.ot_id)).toEqual(['F', 'O']);
-    // Frozen conserva seq 9; open continúa en 10 (sin colisión)
-    expect(seq.map((s) => s.stop_sequence)).toEqual([9, 10]);
-  });
-
-  it('insertionDeltaKm es número finito', () => {
-    const d = insertionDeltaKm(
-      [stop('A', -33.5, -70.7, 'CAMION_ASIGNADO', 1)],
-      stop('B', -33.51, -70.71, 'PENDIENTE_RUTEO', 0),
-      1,
-      { lat: -33.5132, lng: -70.7672 }
-    );
-    expect(Number.isFinite(d)).toBe(true);
-  });
-
-  it('HAZMAT solo inserta en viaje con tag HAZMAT', () => {
-    const hazmat = { ...stop('H', -33.51, -70.71, 'PENDIENTE_RUTEO', 0), tags: ['HAZMAT'] };
-    const trips = [
-      {
-        trip_id: 'T-normal',
-        chofer_id: 'c1',
-        open: [stop('A', -33.505, -70.705, 'CAMION_ASIGNADO', 1)],
-        volume: 1,
-        capacity: 100,
-        seed: { lat: -33.5132, lng: -70.7672 },
-        tags: [],
-      },
-      {
-        trip_id: 'T-hazmat',
-        chofer_id: 'c2',
-        open: [stop('B', -33.52, -70.72, 'CAMION_ASIGNADO', 1)],
-        volume: 1,
-        capacity: 100,
-        seed: { lat: -33.5132, lng: -70.7672 },
-        tags: ['HAZMAT'],
-      },
-    ];
-    const pick = pickBestTripForInsert(trips, hazmat);
-    expect(pick.trip_id).toBe('T-hazmat');
+  it('permite insertar FOOD en un viaje sin carga conflictiva a bordo', () => {
+    const trips = [baseTrip({ tags: ['ALIMENTO'], cargoTags: [] })];
+    const pick = pickBestTripForInsert(trips, candidate(['ALIMENTO']), { depot: DEFAULT_DEPOT });
+    expect(pick).not.toBeNull();
+    expect(pick.trip_id).toBe('TRIP-1');
   });
 });

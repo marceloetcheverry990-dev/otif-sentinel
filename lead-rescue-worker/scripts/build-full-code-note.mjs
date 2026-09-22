@@ -33,6 +33,10 @@ const ROOTS = [
   resolve(repoRoot, 'logistica-app', 'App.tsx'),
   resolve(repoRoot, 'logistica-app', 'package.json'),
   resolve(repoRoot, 'logistica-app', 'app.json'),
+  resolve(repoRoot, 'logistica-app', 'eas.json'),
+  resolve(repoRoot, 'logistica-app', 'proxy-server.mjs'),
+  resolve(repoRoot, 'logistica-app', 'qa-demo-server.mjs'),
+  resolve(repoRoot, 'logistica-app', 'BUILD-APK.md'),
   resolve(repoRoot, 'README.md'),
 ];
 
@@ -118,18 +122,34 @@ let md = `# OTIF Sentinel / lead-rescue-worker — Código completo (nota para I
 - Scope: Worker Cloudflare (\`lead-rescue-worker\`) + app móvil (\`logistica-app/src\`)
 - Archivos incluidos: ${entries.length}
 - **Sin secretos:** no incluye \`.env\` / \`.dev.vars\` / \`package-lock.json\`
-- Deploy de referencia: Worker \`lead-rescue-pipeline\` (Res.154 Fase 2 + R4; commits \`b3d49a8\` / \`5bbf6f8\`)
-- Plan: \`lead-rescue-worker/docs/plan-guia-despacho-res154.md\`
+- Deploy de referencia: Worker \`lead-rescue-pipeline-staging\` — último commit \`c6cc1c1\`, **más cambios sin commitear** (auditoría completa + reserva WMS en ingesta), ya desplegados a staging
+- Planes: \`lead-rescue-worker/docs/PLAN-WMS-LITE.md\`, \`lead-rescue-worker/docs/plan-guia-despacho-res154.md\`
+- Tests rápidos: \`npx vitest run --config vitest.config.node.mjs\` (260 tests) y \`--config vitest.config.ui.js\` (snapshots Torre)
 
 ## Changelog relevante (corte ${stamp})
 
-- **Res.154 Fase 2 (mig 016):** R3 \`ts_source\`/\`REVIEW\`; S6 origen depot+GPS SALIDA; S7 ETA/\`fecha_llegada\`; S8 unique OT+trip+patente; S9 late OT (move-stop/rescate); S10 IndTraslado (1/5/6/7)
-- **R4:** \`dte_api_token\` AES-GCM \`enc$v1$\`; API \`/api/admin/qa/dte-settings\`
-- **Auditoría v2:** R1 retry desde \`guias_despacho\`; R2 sin fallback global identity; S11 match cliente
-- **Auditoría S0–S5:** \`evento_ts_device\` + \`server_received_at\`; retry fecha original; lock EMITTING; STUB sin folio; destino real; \`tenant_settings.dte_*\`
-- **Base Res.154:** emisión en primera \`SALIDA\`, EmisorDTE stub/SimpleAPI, list/retry, badge Torre (OK/ERR/STUB/REV)
-- Migraciones: \`014\`/\`015\`/\`016_res154_phase2.sql\`
-- **Pendiente ops:** credenciales SimpleAPI reales + maestro clientes/depots (dirección/comuna)
+### Auditoría de seguridad/correctitud (sin commitear, desplegado a staging)
+- **Admin:** endpoints \`/api/admin/qa/*\` y GPS config exigen \`is_admin\` (antes bastaba estar logueado)
+- **Multi-tenant:** \`/reporte\` filtra por tenant; Content-Type falso ya no evade \`verifyOperatorTenant\`; pipeline de colas lleva \`tenant_id\` (mig \`024_queue_pipeline_tenant_id\`) y ackea recién tras el commit
+- **Webhooks ERP:** sin fallback a secreto global compartido (\`ORDER_INGEST_ALLOW_GLOBAL_SECRET\` / \`PLATFORM_WEBHOOK_ALLOW_GLOBAL_SECRET\`); upsert de \`clientes\` usa el índice real \`(tenant_id, nombre_cliente_raw)\` — antes el webhook devolvía 500 siempre
+- **DTE:** guía no se emite dos veces (claim por \`upsertGuiaRow\` + referencia con \`trip_id\`); reintento promueve STUB; RUT demo solo en stub; clave de cifrado DTE dedicada
+- **Ruteo:** segregación HAZMAT/alimentos en solver, flota forzada y mediodía; reoptimización no pisa paradas ENTREGADO/EN_SITIO; orden "riesgo primero" estable en el poll
+- **Auth:** rate limit de PIN en KV (cross-isolate, por IP y por cuenta); logout de operador revoca el JWT (jti + KV); comparación de scan token en tiempo constante
+- **Otros:** XSS por comillas en \`escapeHTML\`; SSRF por IPv6 mapeado a IPv4; stack traces sanitizados; rate limit en \`/health\` y dashboards; \`FOR UPDATE\` en asignar chofer; velocidad real en el mapa (desde \`gps_trail\`)
+- **App chofer:** timeout de GPS en confirmación de entrega; banner visible si falla el tracking en background
+
+### Bodega / WMS-lite
+- **Reserva automática en la ingesta:** si el tenant tiene WMS y el pedido trae \`lineas: [{sku, qty}]\`, se reserva stock → \`PENDIENTE_PICKING\` o \`QUIEBRE\` (SAVEPOINT por orden; un fallo de bodega no pierde el batch). Validado E2E en staging: ingesta → picking → packing → ruteable
+- \`bodega.js\` usa una sola conexión por request; \`isWmsEnabledForTenant\` centralizado en \`wms-stock.js\`; reserva mergea SKUs repetidos
+- **Pendiente:** los mappers de plataforma (\`helpers/integrations/mappers.js\`) aún no traducen \`line_items\` a \`lineas\`
+
+### Pendientes conocidos (decisiones, no código)
+- Staging y producción comparten Hyperdrive/KV/R2; el rol de conexión tiene \`BYPASSRLS\` (RLS es cosmético hasta crear \`otif_app_login\`)
+- Tiles de Carto piden API key (watermark en el mapa) — cambiar proveedor o conseguir key
+- \`client_sla_matrix\` no existe → el reporte IA de riesgo no funciona
+
+### Base previa (commit \`c6cc1c1\`)
+- Supabase mig 017–022 (RLS + advisor en cero); cache de poll Torre; E2E chofer; Res.154 Fase 2 (mig 016); R4 token DTE cifrado
 
 ## Tabla de contenidos
 

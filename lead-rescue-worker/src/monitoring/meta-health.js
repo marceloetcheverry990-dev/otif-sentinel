@@ -5,6 +5,7 @@
 
 import { withDb } from '../db.js';
 import { MONITORING_CONFIG } from './config.js';
+import { checkRateLimit } from './rate-limiter.js';
 
 // ============================================================================
 // CONSTANTS
@@ -14,6 +15,12 @@ const SCHEMA_VERSION = '1.0.0';
 
 // metrics_pipeline is considered degraded if no writes in last N minutes
 const METRICS_STALE_THRESHOLD_MINUTES = 30;
+
+// Sin auth (a propósito: es meta-health, lo consultan paneles externos) —
+// pero sin cache ni límite era 3 queries en vivo por request, gratis para
+// cualquiera. Mismo patrón que /health (10s cache) + su rate limiter.
+const META_HEALTH_CACHE_SECONDS = MONITORING_CONFIG.operational.health_check_cache_seconds;
+let metaHealthCache = null;
 
 // ============================================================================
 // HANDLER
@@ -55,10 +62,38 @@ const METRICS_STALE_THRESHOLD_MINUTES = 30;
  * Requirements: 11.1-11.6, 11.10
  */
 export async function handleMonitoringHealth(request, env) {
+  const now = Date.now();
+
+  if (metaHealthCache && (now - metaHealthCache.timestamp) < META_HEALTH_CACHE_SECONDS * 1000) {
+    return new Response(JSON.stringify(metaHealthCache.result, null, 2), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': `public, max-age=${META_HEALTH_CACHE_SECONDS}`,
+      },
+    });
+  }
+
+  const ip = request.headers.get('CF-Connecting-IP')
+    ?? request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim()
+    ?? 'unknown';
+  const rate = checkRateLimit(ip, '/health/monitoring', MONITORING_CONFIG.security.health_check_rate_limit, 60000);
+  if (!rate.allowed) {
+    return new Response(
+      JSON.stringify({ error: 'Too Many Requests', retry_after: rate.retryAfter }),
+      { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(rate.retryAfter) } }
+    );
+  }
+
   const result = await getMonitoringHealthData(env);
+  metaHealthCache = { result, timestamp: now };
+
   return new Response(JSON.stringify(result, null, 2), {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': `public, max-age=${META_HEALTH_CACHE_SECONDS}`,
+    },
   });
 }
 

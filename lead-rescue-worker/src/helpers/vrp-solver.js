@@ -10,6 +10,8 @@ import {
   routeWeight as cargoRouteWeight,
   tagsConflict,
   unionTags,
+  hasHazmat,
+  hasFood,
 } from './cargo-constraints.js';
 
 export const DEFAULT_DEPOT = { lat: -33.5132, lng: -70.7672 };
@@ -83,16 +85,36 @@ export function enforceVehicleCount(routes, maxVehicles, allStops, depot = DEFAU
   for (const s of allStops || []) {
     const id = s && s.ot_id != null ? String(s.ot_id) : '';
     if (!id || seen.has(id)) continue;
-    if (!out.length) out = [[s]];
-    else out[0].push(s);
+    // Buscar la primera ruta que no choque en segregación HAZMAT/FOOD antes
+    // de forzarlo en out[0] a ciegas.
+    const sTags = unionTags([s]);
+    const target = out.find((r) => !tagsConflict(unionTags(r), sTags));
+    if (target) target.push(s);
+    else if (!out.length) out = [[s]];
+    else out.push([s]);
     seen.add(id);
   }
   const cap = Math.max(1, Math.floor(Number(maxVehicles) || 1));
+  // Forzar el N° de camiones fusionando las rutas más chicas — pero nunca
+  // mezclando HAZMAT con FOOD. Si el N° de camiones pedido es incompatible
+  // con la segregación, priorizar la segregación (mejor una ruta de más que
+  // un camión con carga incompatible mezclada).
   while (out.length > cap && out.length > 1) {
     out.sort((a, b) => a.length - b.length);
-    const a = out.shift();
-    const b = out.shift();
-    out.push([...(a || []), ...(b || [])]);
+    let mergedAt = null;
+    outer: for (let x = 0; x < out.length; x++) {
+      for (let y = x + 1; y < out.length; y++) {
+        if (!tagsConflict(unionTags(out[x]), unionTags(out[y]))) {
+          mergedAt = [x, y];
+          break outer;
+        }
+      }
+    }
+    if (!mergedAt) break; // ningún par se puede fusionar sin violar segregación
+    const [x, y] = mergedAt;
+    const merged = [...out[x], ...out[y]];
+    out = out.filter((_, idx) => idx !== x && idx !== y);
+    out.push(merged);
   }
   return out.filter((r) => r.length);
 }
@@ -149,11 +171,11 @@ export function routeFeasibleTw(stops, startMs = Date.now(), velocidadKmH = 35, 
 }
 
 function routeSegregationOk(stops) {
+  // Delegar a cargo-constraints.js (fuente única de verdad de qué tags son
+  // HAZMAT/FOOD) — una copia local aquí ya quedó incompleta una vez (le
+  // faltaba PELIGROSO/PELIGROSA, solo tenía el typo PELGEROSO).
   const tags = unionTags(stops);
-  // union already mixed — check pairwise via hasHazmat/hasFood on union
-  const haz = tags.some((t) => t === 'HAZMAT' || t === 'ADR' || t === 'PELGEROSO');
-  const food = tags.some((t) => t === 'FOOD' || t === 'ALIMENTO' || t === 'ALIMENTOS' || t === 'FRIO_ALIMENTO');
-  return !(haz && food);
+  return !(hasHazmat(tags) && hasFood(tags));
 }
 
 function numW(v, fallback) {

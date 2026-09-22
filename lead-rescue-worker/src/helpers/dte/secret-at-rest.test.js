@@ -6,7 +6,11 @@ import {
   sealSecret,
 } from './secret-at-rest.js';
 
-const ENV = { DASHBOARD_SECRET: 'test-dashboard-secret-32-bytes-min!!' };
+const ENV = {
+  DASHBOARD_SECRET: 'test-dashboard-secret-32-bytes-min!!',
+  DTE_TOKEN_ENCRYPTION_KEY: 'test-dte-encryption-key-32-bytes-min!!',
+};
+const ENV_SOLO_DASHBOARD = { DASHBOARD_SECRET: 'test-dashboard-secret-32-bytes-min!!' };
 
 describe('secret-at-rest (R4)', () => {
   it('round-trip AES-GCM', async () => {
@@ -27,7 +31,28 @@ describe('secret-at-rest (R4)', () => {
     expect(again.sealed).toBe(false);
   });
 
-  it('falla sin clave larga', async () => {
-    await expect(encryptSecret('x', { DASHBOARD_SECRET: 'short' })).rejects.toThrow(/requerido/);
+  it('falla sin clave larga (aun con el flag de compat, el fallback corto no sirve)', async () => {
+    await expect(
+      encryptSecret('x', { DASHBOARD_SECRET: 'short', DTE_ALLOW_SHARED_ENCRYPTION_KEY: 'true' })
+    ).rejects.toThrow(/requerido/);
+  });
+
+  it('cifrar un secreto NUEVO exige DTE_TOKEN_ENCRYPTION_KEY dedicada — no reusa DASHBOARD_SECRET por defecto', async () => {
+    await expect(encryptSecret('token-real', ENV_SOLO_DASHBOARD)).rejects.toThrow(/DTE_TOKEN_ENCRYPTION_KEY/);
+  });
+
+  it('DTE_ALLOW_SHARED_ENCRYPTION_KEY=true restaura el fallback a DASHBOARD_SECRET para cifrar', async () => {
+    const envCompat = { ...ENV_SOLO_DASHBOARD, DTE_ALLOW_SHARED_ENCRYPTION_KEY: 'true' };
+    const blob = await encryptSecret('token-real', envCompat);
+    expect(isEncryptedSecret(blob)).toBe(true);
+    expect(await decryptSecret(blob, envCompat)).toBe('token-real');
+  });
+
+  it('descifrar SIEMPRE puede caer a DASHBOARD_SECRET (compatibilidad hacia atrás, sin flag)', async () => {
+    // Sellado con la clave dedicada, pero un env que luego solo tiene DASHBOARD_SECRET
+    // (p.ej. si DTE_TOKEN_ENCRYPTION_KEY se agrega recién ahora) sigue pudiendo
+    // descifrar lo que YA estaba cifrado con DASHBOARD_SECRET.
+    const blob = await encryptSecret('token-viejo', { ...ENV_SOLO_DASHBOARD, DTE_ALLOW_SHARED_ENCRYPTION_KEY: 'true' });
+    expect(await decryptSecret(blob, ENV_SOLO_DASHBOARD)).toBe('token-viejo');
   });
 });

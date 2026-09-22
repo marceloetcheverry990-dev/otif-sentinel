@@ -152,6 +152,7 @@ export async function getChoferRutas(request, env) {
       const pod_requirements = resolvePodRequirements({
         tenantSettings: podBase,
         orderMetadata: meta,
+        env,
       });
       return {
         id: o.ot_id,

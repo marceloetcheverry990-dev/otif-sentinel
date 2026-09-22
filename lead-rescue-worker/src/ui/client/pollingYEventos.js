@@ -243,7 +243,7 @@ export const POLLING_EVENTOS_SCRIPT = `
           var money = function(val) { return '$' + Number(val || 0).toLocaleString('es-CL'); };
 
           var safeStr = function(s) {
-            return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
           };
           var safeHref = function(u) {
             var s = String(u == null ? '' : u).trim();
@@ -875,6 +875,22 @@ export const POLLING_EVENTOS_SCRIPT = `
         }
       };
 
+      // Mismo comparador que sortViajesSeguros (src/ui/server/calculosViaje.js):
+      // el SSR ordena riesgo > valor > trip_id, pero el poll nunca reordenaba —
+      // las tarjetas se reacomodaban solas cada ~5-10s con el orden crudo de la DB.
+      function sortViajesPorRiesgoCliente(viajes) {
+        viajes.sort(function(a, b) {
+          var riesgoA = (Number(a.entregas_rechazadas) > 0 || Number(a._riesgo_dinamico) > 0 || Number(a.sla_risk_score) >= 50) ? 1 : 0;
+          var riesgoB = (Number(b.entregas_rechazadas) > 0 || Number(b._riesgo_dinamico) > 0 || Number(b.sla_risk_score) >= 50) ? 1 : 0;
+          if (riesgoA !== riesgoB) return riesgoB - riesgoA;
+          var empA = Number(a.sla_risk_score) || 0;
+          var empB = Number(b.sla_risk_score) || 0;
+          if (empA !== empB) return empB - empA;
+          if (a.valor_total_viaje !== b.valor_total_viaje) return Number(b.valor_total_viaje) - Number(a.valor_total_viaje);
+          return String(a.trip_id || '').localeCompare(String(b.trip_id || ''));
+        });
+      }
+
       // Global: Ruta Rápida y otros scripts reinician el poll al cerrar modales
       let viajesRefreshInflight = null;
       const actualizarViajesSilencioso = async () => {
@@ -918,6 +934,7 @@ export const POLLING_EVENTOS_SCRIPT = `
           }
 
           // Actualizar estado en memoria PRIMERO, luego re-renderizar
+          if (Array.isArray(data.viajes)) sortViajesPorRiesgoCliente(data.viajes);
           window.viajesActivos = data.viajes;
           window._fleetAlerts = Array.isArray(data.fleet_alerts) ? data.fleet_alerts : [];
           if (typeof window.renderLeadRescueBanner === 'function') {
@@ -1016,6 +1033,9 @@ export const POLLING_EVENTOS_SCRIPT = `
             document.querySelectorAll('.tab-btn').forEach(function(btn) {
               if (btn.dataset.target === 'panel-backlog') {
                 btn.textContent = '📋 Backlog (' + backlogCount + ')';
+              }
+              if (btn.dataset.target === 'panel-flota') {
+                btn.textContent = '🚚 Flota (' + (data.viajes || []).length + ')';
               }
             });
 

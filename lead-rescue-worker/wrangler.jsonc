@@ -76,7 +76,9 @@
 		"ENVIRONMENT": "production",
 		"DTE_PROVIDER": "stub",
 		"DTE_AMBIENTE": "certificacion",
-		"SHARED_DATASTORE": "false"
+		"SHARED_DATASTORE": "false",
+		"POD_SCAN_ENABLED": "false",
+		"WMS_ENABLED": "false"
 		// DASHBOARD_SECRET: configurar con `wrangler secret put DASHBOARD_SECRET`
 		// Generar con: openssl rand -base64 32
 		// NUNCA escribir el valor aquí — va exclusivamente como Cloudflare Secret
@@ -115,7 +117,9 @@
 				"DTE_PROVIDER": "stub",
 				"DTE_ALLOW_STUB": "true",
 				"DTE_AMBIENTE": "certificacion",
-				"SHARED_DATASTORE": "true"
+				"SHARED_DATASTORE": "true",
+				"POD_SCAN_ENABLED": "false",
+				"WMS_ENABLED": "true"
 			},
 			"queues": {
 				"producers": [

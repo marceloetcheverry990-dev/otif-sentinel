@@ -6,6 +6,7 @@ import { emitGuiasForTrip } from '../helpers/dte/emit-on-salida.js';
 import { buildComprobanteDte52 } from '../helpers/dte/comprobante-dte52.js';
 import { resolveDteEnv } from '../helpers/dte/resolve-dte-env.js';
 import { getTenantSettings } from '../helpers/tenant-settings.js';
+import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 
 const JSON_HEADERS = { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
 
@@ -117,7 +118,9 @@ export async function listGuiasDespacho(request, env, operator = null) {
     const payload = parseMeta(g.payload_enviado);
     const clienteNombre = payload.cliente_nombre || ot?.cliente || meta.cliente || null;
     let clienteRut = payload.cliente_rut || meta.cliente_rut || meta.rut_receptor || meta.rut || null;
-    if (!clienteRut && clienteNombre) {
+    // Solo en stub/certificación (mismo gate que el RUT emisor demo, líneas arriba) —
+    // en producción con proveedor real, mejor un RUT ausente que uno inventado.
+    if (!clienteRut && clienteNombre && (dteEnv.DTE_PROVIDER === 'stub' || String(env.DTE_ALLOW_STUB || '').toLowerCase() === 'true')) {
       clienteRut = demoReceptorRutByNombre(clienteNombre);
     }
     const tipoRaw = g.tipo_traslado || payload.tipo_traslado || meta.tipo_traslado || null;
@@ -289,6 +292,8 @@ export async function retryGuiasDespacho(request, env, operator = null) {
     mode: 'retry',
     confirm_clamped_ts: true,
   });
+
+  invalidateTowerPoll(tenant_id);
 
   return json({ exito: true, fecha_emision_iso, ...stats });
 }

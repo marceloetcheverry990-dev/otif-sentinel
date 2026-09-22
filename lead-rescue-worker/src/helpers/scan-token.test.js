@@ -54,4 +54,23 @@ describe('scan-token (C-11)', () => {
     expect(r.ok).toBe(true);
     expect(r.mode).toBe('stored');
   });
+
+  it('sin secreto configurado, cae al legacy_ot_id (comparación timing-safe igual funciona)', async () => {
+    const ok = await verifyPackageScan({
+      scannedRaw: 'OT-9',
+      stopId: 'OT-9',
+      tenantId: 't1',
+      env: {},
+    });
+    expect(ok.ok).toBe(true);
+    expect(ok.mode).toBe('legacy_ot_id');
+
+    const bad = await verifyPackageScan({
+      scannedRaw: 'OT-DISTINTO',
+      stopId: 'OT-9',
+      tenantId: 't1',
+      env: {},
+    });
+    expect(bad.ok).toBe(false);
+  });
 });

@@ -41,6 +41,34 @@ function isBlockedIpv6(host) {
 }
 
 /**
+ * Extrae la IPv4 embebida de direcciones IPv6 mapeadas/compatibles, para que
+ * ::ffff:169.254.169.254, ::ffff:a9fe:a9fe y la forma deprecated ::127.0.0.1
+ * pasen por el mismo chequeo que un literal IPv4 — si no, son un bypass
+ * directo del bloqueo de IPs privadas/metadata (isBlockedIpv4).
+ * @param {string} host - IPv6 sin corchetes
+ * @returns {string|null} IPv4 en notación decimal, o null si no aplica
+ */
+function extractEmbeddedIpv4(host) {
+  const h = host.toLowerCase();
+
+  // ::ffff:a.b.c.d (mapeada) o ::a.b.c.d (compatible, deprecated) — cola dotted-quad
+  const dotted = h.match(/(?:^::(?:ffff:)?)(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (dotted) return dotted[1];
+
+  // ::ffff:XXXX:XXXX (mapeada) o ::XXXX:XXXX (compatible) — el parser WHATWG URL
+  // normaliza AMBAS formas dotted-quad a hex puro (ej. ::ffff:127.0.0.1 → ::ffff:7f00:1),
+  // así que este es el formato que realmente llega en host tras new URL(...).
+  const hexMapped = h.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hexMapped) {
+    const hi = parseInt(hexMapped[1], 16);
+    const lo = parseInt(hexMapped[2], 16);
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  }
+
+  return null;
+}
+
+/**
  * @param {string} rawUrl
  * @param {{ allowedHosts?: string[] }} [opts]
  * @returns {{ ok: true, url: URL } | { ok: false, error: string }}
@@ -69,8 +97,15 @@ export function validateRemoteUrl(rawUrl, opts = {}) {
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) && isBlockedIpv4(host)) {
     return { ok: false, error: 'IP privada o reservada no permitida' };
   }
-  if (host.includes(':') && isBlockedIpv6(host.replace(/^\[|\]$/g, ''))) {
-    return { ok: false, error: 'IP privada o reservada no permitida' };
+  if (host.includes(':')) {
+    const bareHost = host.replace(/^\[|\]$/g, '');
+    if (isBlockedIpv6(bareHost)) {
+      return { ok: false, error: 'IP privada o reservada no permitida' };
+    }
+    const embeddedV4 = extractEmbeddedIpv4(bareHost);
+    if (embeddedV4 && isBlockedIpv4(embeddedV4)) {
+      return { ok: false, error: 'IP privada o reservada no permitida' };
+    }
   }
 
   if (opts.allowedHosts?.length) {

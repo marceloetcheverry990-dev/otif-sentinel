@@ -23,4 +23,26 @@ describe('validateRemoteUrl', () => {
     expect(validateRemoteUrl('https://evil.com/a', { allowedHosts: ['docs.google.com'] }).ok).toBe(false);
     expect(validateRemoteUrl('https://docs.google.com/a', { allowedHosts: ['docs.google.com'] }).ok).toBe(true);
   });
+
+  it('rechaza IPv6 privadas/reservadas literales', () => {
+    expect(validateRemoteUrl('https://[::1]/x').ok).toBe(false);
+    expect(validateRemoteUrl('https://[fe80::1]/x').ok).toBe(false);
+    expect(validateRemoteUrl('https://[fd00::1]/x').ok).toBe(false);
+  });
+
+  it('rechaza IPv4 embebida en IPv6 (bypass vía ::ffff:...) — metadata cloud y loopback', () => {
+    // Forma mapeada dotted-quad
+    expect(validateRemoteUrl('https://[::ffff:169.254.169.254]/latest').ok).toBe(false);
+    expect(validateRemoteUrl('https://[::ffff:127.0.0.1]/x').ok).toBe(false);
+    expect(validateRemoteUrl('https://[::ffff:10.0.0.5]/x').ok).toBe(false);
+    // Forma compatible deprecated (sin ffff)
+    expect(validateRemoteUrl('https://[::127.0.0.1]/x').ok).toBe(false);
+    // Forma toda en hex: 169.254.169.254 = a9fe:a9fe
+    expect(validateRemoteUrl('https://[::ffff:a9fe:a9fe]/latest').ok).toBe(false);
+  });
+
+  it('sigue aceptando IPv6 públicas legítimas', () => {
+    // 2001:4860:4860::8888 = DNS público de Google, no debe bloquearse
+    expect(validateRemoteUrl('https://[2001:4860:4860::8888]/x').ok).toBe(true);
+  });
 });

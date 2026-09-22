@@ -329,6 +329,9 @@ function assertStagingVideoQa(env) {
  * body: { chofer_id?: string, rut?: string }
  */
 export async function adminQaDriverToken(request, env, operator = null) {
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;
@@ -395,6 +398,9 @@ export async function adminQaDriverToken(request, env, operator = null) {
  * Upsert flota_vehiculos para Lead Rescue / gps/live.
  */
 export async function adminQaSeedFleetGps(request, env, operator = null) {
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;
@@ -513,6 +519,9 @@ export async function adminQaSeedFleetGps(request, env, operator = null) {
  * Procesa outbox PENDING (SMS/email).
  */
 export async function adminFlushNotifications(request, env, operator = null) {
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;
@@ -577,6 +586,9 @@ export async function adminFlushNotifications(request, env, operator = null) {
  * body: { ot_id }
  */
 export async function adminQaOtScanToken(request, env, operator = null) {
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;
@@ -629,6 +641,9 @@ async function tableColumns(client, table) {
  * Inspecciona columnas críticas (012 + 013).
  */
 export async function adminQaSchemaStatus(request, env, operator = null) {
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;
@@ -686,6 +701,9 @@ export async function adminQaSchemaStatus(request, env, operator = null) {
  * Aplica migraciones 012 + 013 + 014 + 015 (idempotente ADD IF NOT EXISTS + backfill).
  */
 export async function adminQaApplySchema(request, env, operator = null) {
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;
@@ -921,6 +939,9 @@ export async function adminQaApplySchema(request, env, operator = null) {
  * }
  */
 export async function adminQaDteSettings(request, env, operator = null) {
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;
@@ -1021,6 +1042,9 @@ export async function adminQaDteSettings(request, env, operator = null) {
  * body: { apply?: boolean } — default dry-run (solo conteos).
  */
 export async function adminQaCleanup(request, env, operator = null) {
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;
@@ -1246,6 +1270,9 @@ export async function adminQaVideoPrep(request, env, operator = null) {
   const blocked = assertStagingVideoQa(env);
   if (blocked) return blocked;
 
+  if (!operator?.is_admin) {
+    return jsonResponse({ error: 'Requiere admin', code: 'admin_required' }, 403);
+  }
   const tenant_id = operator?.tenant_id;
   const tenantError = requireTenantId(tenant_id);
   if (tenantError) return tenantError;

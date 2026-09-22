@@ -22,5 +22,8 @@ export const APP_CONFIG = deepFreeze({
   },
   UI: {
     COLORS: { EXITO: '#10b981', ALERTA: '#ef4444', NEUTRAL: '#2563eb', WARNING: '#f59e0b' }
+  },
+  WMS: {
+    ENABLED: false
   }
 });

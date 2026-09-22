@@ -3,6 +3,8 @@
  * El QR debe llevar este token (o JSON {scan_token}); el servidor lo recomputa.
  */
 
+import { timingSafeEqualString } from './pin-kdf.js';
+
 function b64url(bytes) {
   let bin = '';
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -67,17 +69,17 @@ export async function verifyPackageScan({
   const candidate = extractScanTokenCandidate(scannedRaw);
   if (!candidate) return { ok: false, code: 'scan_required' };
 
-  if (storedToken && candidate === String(storedToken).trim()) {
+  if (storedToken && timingSafeEqualString(candidate, String(storedToken).trim())) {
     return { ok: true, mode: 'stored' };
   }
 
   const expected = await computeScanToken(tenantId, stopId, env);
-  if (expected && candidate === expected) {
+  if (expected && timingSafeEqualString(candidate, expected)) {
     return { ok: true, mode: 'hmac' };
   }
 
   // Sin secreto en el entorno: fallback legacy (no ideal; solo para lab local)
-  if (!expected && candidate === String(stopId).trim()) {
+  if (!expected && timingSafeEqualString(candidate, String(stopId).trim())) {
     return { ok: true, mode: 'legacy_ot_id' };
   }
 

@@ -52,6 +52,7 @@ import { getExecutiveDashboardData } from './api/dashboard-executive.js';
 import { renderExecutiveDashboard } from './monitoring/dashboard-executive.js';
 import { enforceRetentionPolicies } from './monitoring/retention.js';
 import { handleMonitoringHealth } from './monitoring/meta-health.js';
+import { withHealthCheckRateLimit, withDashboardRateLimit } from './monitoring/rate-limiter.js';
 
 // Limpieza de Staff Dev: Se removiÃ³ 'asignarChofer' de aquÃ­ para evitar colisiones.
 import { recalcularScoring } from './api/choferes.js'; 
@@ -89,6 +90,7 @@ import { handleOperatorLogin, handleOperatorLogout } from './api/operator-login.
 import { handleOperatorMe, handleListOperators, handleCreateOperator } from './api/operators.js';
 import { handleLoginPage } from './api/login-page.js'; // PÃ¡gina HTML de login
 import { handleListDepots, handleCreateDepot } from './api/depots.js';
+import { handleBodega } from './api/bodega.js';
 import { listGuiasDespacho, retryGuiasDespacho } from './api/guias-despacho.js';
 import {
   verifyOperatorTenant,
@@ -189,10 +191,13 @@ export default {
     // =========================================================================
     // ðŸ” MONITORING ENDPOINTS (Health Check & Dashboard)
     // =========================================================================
-    // Health check endpoint - public, no authentication required
-    // Used by load balancers and external monitoring tools
+    // Health check endpoint - público, sin auth, protegido solo por rate limit.
+    // Usado por balanceadores/monitoreo externo — withHealthCheckRateLimit
+    // existía pero nunca se conectó a ningún router (60 req/min por IP).
     if (request.method === "GET" && url.pathname === "/health") {
-      return withMonitoring(handleHealthCheck, { component: 'health-check' })(request, env, ctx);
+      return withHealthCheckRateLimit(
+        withMonitoring(handleHealthCheck, { component: 'health-check' })
+      )(request, env, ctx);
     }
 
     // Monitoring subsystem meta-health â€” informational, always HTTP 200
@@ -202,10 +207,11 @@ export default {
     
     // Monitoring dashboard - requires authentication
     // Task 7.4 - Dashboard HTML interface
+    // withDashboardRateLimit existía pero tampoco estaba conectado (30 req/min por IP).
     if (request.method === "GET" && url.pathname === "/dashboard/monitoring") {
       const access = await requireOperatorAccess(request, env);
       if (!access.ok) return access.response;
-      return renderDashboard(request, env);
+      return withDashboardRateLimit(renderDashboard)(request, env);
     }
     
     // Monitoring dashboard data API - requires authentication
@@ -244,6 +250,11 @@ export default {
       return getOperationalDashboardData(request, env);
     }
 
+    // Raíz → login (evita JSON 404 al abrir el hostname a pelo)
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "")) {
+      return Response.redirect(new URL("/login", url).toString(), 302);
+    }
+
     // â”€â”€ Login de operador Torre de Control â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (request.method === "GET" && url.pathname === "/login") {
       return handleLoginPage(request, env);
@@ -274,6 +285,16 @@ export default {
       if (!access.ok) return access.response;
       return handleListDepots(request, env, access.payload);
     }
+    if (request.method === "GET" && url.pathname === "/api/bodega/resumen") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
+      return handleBodega(request, env, access.payload);
+    }
+    if (request.method === "GET" && url.pathname === "/api/bodega/stock") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
+      return handleBodega(request, env, access.payload);
+    }
     if (request.method === "GET" && url.pathname === "/api/guias-despacho") {
       const access = await requireOperatorAccess(request, env);
       if (!access.ok) return access.response;
@@ -289,6 +310,31 @@ export default {
         handleCreateDepot(req, e, op)
       );
     }
+    if (request.method === "POST" && url.pathname === "/api/bodega/productos") {
+      return runOperatorMutation(request, env, ctx, 'bodega.productos.upsert', (req, e, op) =>
+        handleBodega(req, e, op)
+      );
+    }
+    if (request.method === "POST" && url.pathname === "/api/bodega/ajuste") {
+      return runOperatorMutation(request, env, ctx, 'bodega.stock.adjust', (req, e, op) =>
+        handleBodega(req, e, op)
+      );
+    }
+    if (request.method === "POST" && url.pathname === "/api/bodega/reservar") {
+      return runOperatorMutation(request, env, ctx, 'bodega.ot.reserve', (req, e, op) =>
+        handleBodega(req, e, op)
+      );
+    }
+    if (request.method === "POST" && url.pathname === "/api/bodega/picking") {
+      return runOperatorMutation(request, env, ctx, 'bodega.ot.picking', (req, e, op) =>
+        handleBodega(req, e, op)
+      );
+    }
+    if (request.method === "POST" && url.pathname === "/api/bodega/packing") {
+      return runOperatorMutation(request, env, ctx, 'bodega.ot.packing', (req, e, op) =>
+        handleBodega(req, e, op)
+      );
+    }
 
     // ---> NUEVAS RUTAS: APP MÃ“VIL (B2B) <---
     if (request.method === "POST" && url.pathname === "/api/choferes/login") return loginChofer(request, env, ctx);
@@ -298,7 +344,7 @@ export default {
     if (request.method === "GET"  && url.pathname === '/api/app-chofer-rutas') return await getChoferRutas(request, env);
     if (request.method === "POST" && url.pathname === "/api/choferes/check-rut") return checkChoferRut(request, env, ctx);
     if (request.method === "POST" && url.pathname === "/api/choferes/activate") return activateChofer(request, env, ctx);
-    if (url.pathname.startsWith('/api/chat')) return handleChat(request, env);
+    if (url.pathname === '/api/chat') return handleChat(request, env);
     if (request.method === "POST" && url.pathname === "/api/upload-evidence") return handleUploadEvidence(request, env);
     if (request.method === "POST" && url.pathname === "/api/choferes/reset-demo") return adminQaResetMyDemoTrip(request, env);
     if (url.pathname === '/api/mobile-sync' && request.method === 'POST') { return handleMobileSync(request, env, ctx);}
@@ -428,10 +474,10 @@ export default {
     }
 
     // --- Dashboards (Pantallas visuales para el navegador) ---
-    if (request.method === "GET" && url.pathname.startsWith("/reporte")) {
+    if (request.method === "GET" && url.pathname === "/reporte") {
       const access = await requireOperatorAccess(request, env);
       if (!access.ok) return access.response;
-      return renderReporte(request, env, ctx);
+      return renderReporte(request, env, ctx, access.payload);
     }
     if (request.method === "GET" && url.pathname === "/control-tower") {
       const access = await requireOperatorAccess(request, env);
@@ -487,7 +533,7 @@ export default {
     }
     if (request.method === "POST" && url.pathname === "/api/recalcular-scoring") {
       return runOperatorMutation(request, env, ctx, 'scoring.recalc', (req, e, op) =>
-        recalcularScoring(req, e, ctx)
+        recalcularScoring(req, e, op)
       );
     }
     if (request.method === "GET" && url.pathname === "/api/fixtures/bodega-sample.csv") {

@@ -33,11 +33,39 @@ export async function resolveCliente(supabase, tenant_id, nombre) {
     return { cliente: null, reason: 'cliente_vacio' };
   }
 
+  // Match exacto (case/acento-insensitive) primero, sin LIMIT: si hay muchos
+  // clientes cuyo nombre contiene `raw` como substring, el fuzzy de abajo
+  // (con LIMIT 25 y sin ORDER BY) puede truncar la lista antes de llegar al
+  // match exacto real — acá no, porque ILIKE sin comodines ya filtra por
+  // igualdad y el set de candidatos es chico.
+  const exactRes = await supabase
+    .from('clientes')
+    .select('direccion_calle, comuna, nombre_cliente_raw')
+    .eq('tenant_id', tenant_id)
+    .ilike('nombre_cliente_raw', raw);
+
+  if (exactRes.error) {
+    return { cliente: null, reason: `cliente_query_error:${exactRes.error.message}` };
+  }
+  const exactRows = (exactRes.data || []).filter(
+    (r) => normalizeClienteNombre(r.nombre_cliente_raw) === norm
+  );
+  if (exactRows.length === 1) {
+    return { cliente: exactRows[0], reason: null };
+  }
+  if (exactRows.length > 1) {
+    return { cliente: null, reason: `ambiguous_cliente:${raw}` };
+  }
+
+  // Sin match exacto: buscar por substring, con orden determinístico (antes
+  // no tenía ORDER BY — Postgres no garantiza orden estable sin uno, así que
+  // qué 25 filas quedaban dentro del LIMIT podía variar entre llamadas).
   const { data: rows, error } = await supabase
     .from('clientes')
     .select('direccion_calle, comuna, nombre_cliente_raw')
     .eq('tenant_id', tenant_id)
     .ilike('nombre_cliente_raw', `%${raw}%`)
+    .order('nombre_cliente_raw', { ascending: true })
     .limit(25);
 
   if (error) {
@@ -45,13 +73,6 @@ export async function resolveCliente(supabase, tenant_id, nombre) {
   }
 
   const list = rows || [];
-  const exact = list.filter((r) => normalizeClienteNombre(r.nombre_cliente_raw) === norm);
-  if (exact.length === 1) {
-    return { cliente: exact[0], reason: null };
-  }
-  if (exact.length > 1) {
-    return { cliente: null, reason: `ambiguous_cliente:${raw}` };
-  }
   if (list.length === 1) {
     return { cliente: list[0], reason: null };
   }

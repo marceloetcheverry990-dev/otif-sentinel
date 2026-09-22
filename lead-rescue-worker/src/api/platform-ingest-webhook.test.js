@@ -21,6 +21,7 @@ import {
   handleNetSuite,
   handlePos,
 } from '../api/platform-ingest-webhook.js';
+import { OrderIngestPayloadSchema } from '../config.js';
 
 const TENANT = 'empresa_base';
 const SECRET = 'test-platform-secret-32chars-min!!';
@@ -193,6 +194,127 @@ describe('mappers leen payloads reales', () => {
   });
 });
 
+describe('mappers → lineas (SKU+qty) para la reserva de bodega', () => {
+  it('Shopify: line_items → lineas, mergea SKU repetido', () => {
+    const { orders } = mapShopifyPayload({
+      name: '#3001',
+      line_items: [
+        { sku: 'CAFE-1KG', quantity: 2 },
+        { sku: 'TE-500', quantity: 1 },
+        { sku: 'CAFE-1KG', quantity: 3 },
+      ],
+    });
+    expect(orders[0].lineas).toEqual([
+      { sku: 'CAFE-1KG', qty: 5 },
+      { sku: 'TE-500', qty: 1 },
+    ]);
+  });
+
+  it('Shopify: salta gift cards / no despachables y usa current_quantity (0 = línea quitada)', () => {
+    const { orders } = mapShopifyPayload({
+      name: '#3002',
+      line_items: [
+        { sku: 'CAFE-1KG', quantity: 3, current_quantity: 1 },
+        { sku: 'QUITADO', quantity: 2, current_quantity: 0 },
+        { sku: 'GIFT-10K', quantity: 1, gift_card: true, requires_shipping: false },
+        { sku: 'EBOOK', quantity: 1, requires_shipping: false },
+      ],
+    });
+    expect(orders[0].lineas).toEqual([{ sku: 'CAFE-1KG', qty: 1 }]);
+  });
+
+  it('Shopify: líneas sin SKU se saltan con warning y se reservan las demás', () => {
+    const { orders, warnings } = mapShopifyPayload({
+      name: '#3003',
+      line_items: [
+        { sku: '', quantity: 1, title: 'Producto sin SKU' },
+        { sku: 'TE-500', quantity: 2 },
+      ],
+    });
+    expect(orders[0].lineas).toEqual([{ sku: 'TE-500', qty: 2 }]);
+    expect(warnings).toContain('lineas_sin_sku:3003:1');
+  });
+
+  it('Shopify sin line_items: lineas undefined (orden sigue sin WMS)', () => {
+    const { orders } = mapShopifyPayload({ name: '#3004' });
+    expect(orders[0].lineas).toBeUndefined();
+  });
+
+  it('más de 100 SKUs distintos: omite la reserva con warning en vez de romper el batch en la validación', () => {
+    const line_items = Array.from({ length: 101 }, (_, i) => ({ sku: `SKU-${i}`, quantity: 1 }));
+    const { orders, warnings } = mapShopifyPayload({ name: '#3005', line_items });
+    expect(orders[0].lineas).toBeUndefined();
+    expect(warnings).toContain('lineas_excedidas:3005:101');
+  });
+
+  it('WooCommerce: line_items → lineas', () => {
+    const { orders } = mapWooCommercePayload({
+      number: '77',
+      line_items: [{ sku: 'TE-500', quantity: 4 }],
+    });
+    expect(orders[0].lineas).toEqual([{ sku: 'TE-500', qty: 4 }]);
+  });
+
+  it('SAP OData entrega: to_DeliveryDocumentItem.results con cantidades string', () => {
+    const { orders } = mapSapPayload({
+      DeliveryDocument: '80001234',
+      to_DeliveryDocumentItem: {
+        results: [
+          { Material: 'MAT-100', ActualDeliveryQuantity: '4.000' },
+          { Material: 'MAT-200', ActualDeliveryQuantity: '0.000' },
+        ],
+      },
+    });
+    expect(orders[0].lineas).toEqual([{ sku: 'MAT-100', qty: 4 }]);
+  });
+
+  it('SAP IDoc: MATNR + LFIMG, respeta ceros a la izquierda del material', () => {
+    const { orders } = mapSapPayload({
+      VBELN: '0080000001',
+      items: [{ MATNR: '000000000000012345', LFIMG: 6 }],
+    });
+    expect(orders[0].lineas).toEqual([{ sku: '000000000000012345', qty: 6 }]);
+  });
+
+  it('NetSuite REST: item.items con item.refName', () => {
+    const { orders } = mapNetSuitePayload({
+      tranId: 'SO-9',
+      item: { items: [{ item: { refName: 'NS-SKU-1' }, quantity: 3 }] },
+    });
+    expect(orders[0].lineas).toEqual([{ sku: 'NS-SKU-1', qty: 3 }]);
+  });
+
+  it('NetSuite: `items` en la raíz sigue siendo lote de pedidos, no productos', () => {
+    const { orders } = mapNetSuitePayload({
+      items: [
+        { tranId: 'SO-A', lines: [{ sku: 'X', quantity: 1 }] },
+        { tranId: 'SO-B' },
+      ],
+    });
+    expect(orders.map((o) => o.ot_id)).toEqual(['SO-A', 'SO-B']);
+    expect(orders[0].lineas).toEqual([{ sku: 'X', qty: 1 }]);
+    expect(orders[1].lineas).toBeUndefined();
+  });
+
+  it('POS: line_items con quantity string (estilo Square)', () => {
+    const { orders } = mapPosPayload({
+      order_id: 'sq_1',
+      line_items: [{ sku: 'POS-1', quantity: '2' }, { name: 'Sin SKU', quantity: '1' }],
+    });
+    expect(orders[0].lineas).toEqual([{ sku: 'POS-1', qty: 2 }]);
+  });
+
+  it('las lineas mapeadas pasan la validación del schema de ingesta', () => {
+    const { orders } = mapShopifyPayload({
+      name: '#3006',
+      line_items: [{ sku: 'CAFE-1KG', quantity: 2 }],
+    });
+    const r = OrderIngestPayloadSchema.safeParse({ tenant_id: 'empresa_base', orders });
+    expect(r.success).toBe(true);
+    expect(r.data.orders[0].lineas).toEqual([{ sku: 'CAFE-1KG', qty: 2 }]);
+  });
+});
+
 describe('HMAC plataformas', () => {
   it('Shopify base64 ok', async () => {
     const body = '{"id":1}';
@@ -207,7 +329,7 @@ describe('HMAC plataformas', () => {
     expect(await verifyHexSha256Header(new TextEncoder().encode(body), sig, SECRET)).toBe(true);
   });
 
-  it('resolvePlatformSecret prioriza PLATFORM_WEBHOOK_SECRETS', () => {
+  it('resolvePlatformSecret prioriza PLATFORM_WEBHOOK_SECRETS["plataforma:tenant"]', () => {
     expect(
       resolvePlatformSecret(
         {
@@ -218,6 +340,33 @@ describe('HMAC plataformas', () => {
         'empresa_base'
       )
     ).toBe('s1');
+  });
+
+  it('NO cae a secretos compartidos (por plataforma o globales) por defecto — evita que quien conozca su propio secreto Shopify falsifique órdenes de otro tenant', () => {
+    expect(
+      resolvePlatformSecret(
+        {
+          PLATFORM_WEBHOOK_SECRETS: JSON.stringify({ shopify: 'per-platform' }),
+          SHOPIFY_WEBHOOK_SECRET: 'per-platform-env',
+          ORDER_INGEST_SECRET: 'global',
+        },
+        'shopify',
+        'otro_tenant_sin_config'
+      )
+    ).toBeNull();
+  });
+
+  it('cae a secretos compartidos solo con PLATFORM_WEBHOOK_ALLOW_GLOBAL_SECRET=true', () => {
+    expect(
+      resolvePlatformSecret(
+        {
+          SHOPIFY_WEBHOOK_SECRET: 'per-platform-env',
+          PLATFORM_WEBHOOK_ALLOW_GLOBAL_SECRET: 'true',
+        },
+        'shopify',
+        'empresa_base'
+      )
+    ).toBe('per-platform-env');
   });
 });
 
@@ -251,8 +400,7 @@ describe('handlers end-to-end (mock DB)', () => {
       body,
     });
     const res = await handleShopify(req, {
-      ORDER_INGEST_SECRET: SECRET,
-      SHOPIFY_WEBHOOK_SECRET: SECRET,
+      PLATFORM_WEBHOOK_SECRETS: JSON.stringify({ [`shopify:${TENANT}`]: SECRET }),
     });
     expect(res.status).toBe(200);
     const j = await res.json();
@@ -285,7 +433,9 @@ describe('handlers end-to-end (mock DB)', () => {
       },
       body,
     });
-    const res = await handleWoo(req, { WOOCOMMERCE_WEBHOOK_SECRET: SECRET });
+    const res = await handleWoo(req, {
+      PLATFORM_WEBHOOK_SECRETS: JSON.stringify({ [`woocommerce:${TENANT}`]: SECRET }),
+    });
     expect(res.status).toBe(200);
     const j = await res.json();
     expect(j.exito).toBe(true);
@@ -312,7 +462,9 @@ describe('handlers end-to-end (mock DB)', () => {
       },
       body,
     });
-    const res = await handleSap(req, { SAP_WEBHOOK_SECRET: SECRET });
+    const res = await handleSap(req, {
+      PLATFORM_WEBHOOK_SECRETS: JSON.stringify({ [`sap:${TENANT}`]: SECRET }),
+    });
     expect(res.status).toBe(200);
     expect((await res.json()).platform).toBe('sap');
   });
@@ -335,7 +487,9 @@ describe('handlers end-to-end (mock DB)', () => {
       },
       body,
     });
-    const res = await handleNetSuite(req, { NETSUITE_WEBHOOK_SECRET: SECRET });
+    const res = await handleNetSuite(req, {
+      PLATFORM_WEBHOOK_SECRETS: JSON.stringify({ [`netsuite:${TENANT}`]: SECRET }),
+    });
     expect(res.status).toBe(200);
     expect((await res.json()).platform).toBe('netsuite');
   });
@@ -358,7 +512,9 @@ describe('handlers end-to-end (mock DB)', () => {
       },
       body,
     });
-    const res = await handlePos(req, { POS_WEBHOOK_SECRET: SECRET });
+    const res = await handlePos(req, {
+      PLATFORM_WEBHOOK_SECRETS: JSON.stringify({ [`pos:${TENANT}`]: SECRET }),
+    });
     expect(res.status).toBe(200);
     expect((await res.json()).platform).toBe('pos');
   });
@@ -373,7 +529,28 @@ describe('handlers end-to-end (mock DB)', () => {
       },
       body: '{"id":1,"name":"#1","shipping_address":{"name":"A","address1":"x","city":"y","country":"CL"}}',
     });
-    const res = await handleShopify(req, { SHOPIFY_WEBHOOK_SECRET: SECRET });
+    const res = await handleShopify(req, {
+      PLATFORM_WEBHOOK_SECRETS: JSON.stringify({ [`shopify:${TENANT}`]: SECRET }),
+    });
     expect(res.status).toBe(401);
+  });
+
+  it('503 si el tenant no tiene secreto propio configurado (no cae al global aunque exista)', async () => {
+    const req = new Request('https://worker.test/api/webhooks/shopify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Tenant-Id': 'tenant_sin_secreto_propio',
+        'X-Shopify-Hmac-Sha256': 'aaaa',
+      },
+      body: '{"id":1,"name":"#1","shipping_address":{"name":"A","address1":"x","city":"y","country":"CL"}}',
+    });
+    const res = await handleShopify(req, {
+      SHOPIFY_WEBHOOK_SECRET: SECRET,
+      ORDER_INGEST_SECRET: SECRET,
+    });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.code).toBe('secret_missing');
   });
 });

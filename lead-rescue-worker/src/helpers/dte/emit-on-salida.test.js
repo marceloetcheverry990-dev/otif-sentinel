@@ -1,10 +1,57 @@
 import { describe, expect, it, vi } from 'vitest';
-import { loadOrdenesForEmit, shouldSkipExisting } from './emit-on-salida.js';
+import { loadOrdenesForEmit, shouldSkipExisting, upsertGuiaRow } from './emit-on-salida.js';
+
+describe('upsertGuiaRow — no debe permitir doble emisión real cuando hay una carrera', () => {
+  it('insert exitoso → claimed:true', async () => {
+    const supabase = {
+      from: () => ({ insert: async () => ({ error: null }) }),
+    };
+    const claim = await upsertGuiaRow(supabase, null, { estado: 'EMITTING' });
+    expect(claim.claimed).toBe(true);
+  });
+
+  it('insert choca con 23505 (otra llamada concurrente ya la creó) → claimed:false, no reintenta emitir', async () => {
+    const supabase = {
+      from: () => ({ insert: async () => ({ error: { code: '23505', message: 'duplicate key' } }) }),
+    };
+    const claim = await upsertGuiaRow(supabase, null, { estado: 'EMITTING' });
+    expect(claim.claimed).toBe(false);
+  });
+
+  it('update sobre fila existente exitoso → claimed:true', async () => {
+    const supabase = {
+      from: () => ({ update: () => ({ eq: async () => ({ error: null }) }) }),
+    };
+    const claim = await upsertGuiaRow(supabase, { id: 'g1' }, { estado: 'EMITTING' });
+    expect(claim.claimed).toBe(true);
+  });
+
+  it('update sobre fila existente con error → claimed:false', async () => {
+    const supabase = {
+      from: () => ({ update: () => ({ eq: async () => ({ error: { message: 'boom' } }) }) }),
+    };
+    const claim = await upsertGuiaRow(supabase, { id: 'g1' }, { estado: 'EMITTING' });
+    expect(claim.claimed).toBe(false);
+  });
+});
 
 describe('shouldSkipExisting', () => {
   it('EMITTING antiguo se puede reintentar', () => {
     const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     expect(shouldSkipExisting({ estado: 'EMITTING', updated_at: old })).toBe(false);
+  });
+
+  it('STUB se salta en modo salida normal (no reescribir en cada parada)', () => {
+    expect(shouldSkipExisting({ estado: 'STUB' })).toBe(true);
+    expect(shouldSkipExisting({ estado: 'STUB' }, { mode: 'salida' })).toBe(true);
+  });
+
+  it('STUB NO se salta en modo retry — debe poder promoverse a emisión real (si no, el reintento que loadOrdenesForEmit fue a buscar vía RETRY_ESTADOS nunca hace nada)', () => {
+    expect(shouldSkipExisting({ estado: 'STUB' }, { mode: 'retry' })).toBe(false);
+  });
+
+  it('EMITIDA siempre se salta, incluso en retry', () => {
+    expect(shouldSkipExisting({ estado: 'EMITIDA' }, { mode: 'retry' })).toBe(true);
   });
 });
 

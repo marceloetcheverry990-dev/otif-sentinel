@@ -632,7 +632,14 @@ export async function confirmRescue(request, env, operator = null, ctx = null) {
         ot_id,
         waitUntil,
       }).catch((e) => console.warn('[DTE_LATE_OT_RESCUE]', e.message));
-      if (!waitUntil) await late;
+      // ensureGuiaForLateOt solo registra en waitUntil su cola de emisión
+      // (el `run()` del final) — todo el trabajo previo (chequear
+      // bitacora_viajes/guias_despacho, crear la fila PENDING) corre como
+      // promesa suelta. Sin registrar la llamada completa acá, Cloudflare
+      // puede tirar el isolate apenas se manda la response y perder ese
+      // trabajo antes de llegar siquiera al waitUntil interno.
+      if (waitUntil) waitUntil(late);
+      else await late;
     }
 
     return jsonResponse({

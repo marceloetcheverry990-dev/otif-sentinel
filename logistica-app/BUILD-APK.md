@@ -59,3 +59,13 @@ El `tenant_id` demo actual es `empresa_base`.
 
 El APK queda apuntando al Worker definido en `eas.json` via `EXPO_PUBLIC_API_URL`.
 Si quieres una build demo distinta, crea otro perfil con otra URL.
+
+### Escaneo QR (piloto)
+
+Por defecto el escaneo QR **no** es obligatorio (`POD_SCAN_ENABLED=false` en app y Worker).
+El chofer confirma entrega con **foto** (y firma si aplica). El código del escáner sigue en el repo.
+
+Para reactivarlo más adelante:
+
+- Worker: `POD_SCAN_ENABLED=true` en `wrangler.jsonc`
+- App: `EXPO_PUBLIC_POD_SCAN_ENABLED=true` en el perfil EAS / `.env`

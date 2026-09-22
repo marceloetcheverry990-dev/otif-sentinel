@@ -56,11 +56,10 @@ export {
 } from './errors.js';
 
 // Metrics Collector (Task 1.6)
-export { 
-  recordMetric, 
-  startTimer as metricsTimer, 
-  withMetrics, 
-  METRIC_TYPES 
+export {
+  recordMetric,
+  startTimer as metricsTimer,
+  METRIC_TYPES
 } from './metrics.js';
 
 // Request Monitoring Middleware (Task 4.1)

@@ -16,6 +16,101 @@ import { HMAC_ALGO, importHmacKey, base64urlEncode, base64urlDecode } from './hm
 export const OPERATOR_TOKEN_EXPIRY_SECONDS = 8 * 60 * 60;
 export const OPERATOR_SESSION_COOKIE = '__Host-otif_operator_session';
 
+// ─── Revocación de sesión (logout real) ────────────────────────────────────
+// Antes: logout solo borraba la cookie — el JWT firmado seguía siendo válido
+// hasta sus 8h de exp si alguien lo había copiado (XSS, log, etc.). Mismo
+// patrón que driver-auth.js: jti + KV DRIVER_REVOKED_JTI (memoria del isolate
+// + KV cross-isolate), reusando el binding — namespace propio 'op_rev:' para
+// no colisionar con las revocaciones de chofer ('drv_rev:').
+const KV_PREFIX = 'op_rev:';
+const revokedJti = new Map();
+const MAX_REVOKED = 5000;
+
+function pruneRevoked(nowSec) {
+  for (const [jti, exp] of revokedJti.entries()) {
+    if (exp <= nowSec) revokedJti.delete(jti);
+  }
+  if (revokedJti.size > MAX_REVOKED) {
+    const overflow = revokedJti.size - MAX_REVOKED;
+    let removed = 0;
+    for (const key of revokedJti.keys()) {
+      revokedJti.delete(key);
+      if (++removed >= overflow) break;
+    }
+  }
+}
+
+/**
+ * Revoca un jti de operador hasta su expiración natural (memoria + KV si hay binding).
+ * @param {string} jti
+ * @param {number} expUnixSeconds
+ * @param {{ DRIVER_REVOKED_JTI?: KVNamespace }} [env]
+ */
+export async function revokeOperatorJti(jti, expUnixSeconds, env = null) {
+  if (!jti || typeof expUnixSeconds !== 'number') return { ok: false, reason: 'bad_args' };
+  const nowSec = Math.floor(Date.now() / 1000);
+  pruneRevoked(nowSec);
+  revokedJti.set(jti, expUnixSeconds);
+
+  const kv = env?.DRIVER_REVOKED_JTI;
+  if (kv && typeof kv.put === 'function') {
+    const ttl = Math.max(60, expUnixSeconds - nowSec);
+    try {
+      await kv.put(`${KV_PREFIX}${jti}`, String(expUnixSeconds), { expirationTtl: ttl });
+      return { ok: true, persisted: true };
+    } catch (e) {
+      console.error('[OPERATOR_REVOKE_KV]', e.message);
+      return { ok: false, persisted: false, reason: 'kv_put_failed' };
+    }
+  }
+  return { ok: true, persisted: false, reason: 'kv_unavailable' };
+}
+
+/** Sync check — solo memoria (tests / fast path). Preferí isOperatorJtiRevokedAsync. */
+export function isOperatorJtiRevoked(jti) {
+  if (!jti) return false;
+  const now = Math.floor(Date.now() / 1000);
+  const exp = revokedJti.get(jti);
+  if (exp == null) return false;
+  if (exp <= now) {
+    revokedJti.delete(jti);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @param {string} jti
+ * @param {{ DRIVER_REVOKED_JTI?: KVNamespace }} [env]
+ */
+export async function isOperatorJtiRevokedAsync(jti, env = null) {
+  if (!jti) return false;
+  if (isOperatorJtiRevoked(jti)) return true;
+
+  const kv = env?.DRIVER_REVOKED_JTI;
+  if (!kv || typeof kv.get !== 'function') return false;
+
+  try {
+    const val = await kv.get(`${KV_PREFIX}${jti}`);
+    if (!val) return false;
+    const exp = Number(val);
+    const now = Math.floor(Date.now() / 1000);
+    if (Number.isFinite(exp) && exp > now) {
+      revokedJti.set(jti, exp);
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.error('[OPERATOR_REVOKE_KV_GET]', e.message);
+    return false;
+  }
+}
+
+/** Testing helper */
+export function clearOperatorRevocations() {
+  revokedJti.clear();
+}
+
 function parseCookies(cookieHeader) {
   const cookies = new Map();
   for (const part of (cookieHeader || '').split(';')) {
@@ -115,12 +210,7 @@ export async function verifyOperatorTenant(request, authenticatedTenant) {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method.toUpperCase())) {
     const contentType = request.headers.get('Content-Type') || '';
     try {
-      if (contentType.includes('application/json')) {
-        const body = await request.clone().json();
-        for (const key of ['tenant_id', 'tenantId']) {
-          if (typeof body?.[key] === 'string') candidates.push(body[key]);
-        }
-      } else if (
+      if (
         contentType.includes('multipart/form-data') ||
         contentType.includes('application/x-www-form-urlencoded')
       ) {
@@ -128,6 +218,15 @@ export async function verifyOperatorTenant(request, authenticatedTenant) {
         for (const key of ['tenant_id', 'tenantId']) {
           const value = form.get(key);
           if (typeof value === 'string') candidates.push(value);
+        }
+      } else {
+        // No confiar en el Content-Type declarado: los handlers reales llaman
+        // request.json() sin mirar el header, así que un Content-Type falso
+        // (ej. text/plain) no debe evadir este chequeo. Intentamos parsear
+        // JSON siempre que el body no sea explícitamente form-data.
+        const body = await request.clone().json();
+        for (const key of ['tenant_id', 'tenantId']) {
+          if (typeof body?.[key] === 'string') candidates.push(body[key]);
         }
       }
     } catch {
@@ -212,8 +311,9 @@ export async function signOperatorToken(payload, env) {
   );
 
   const exp = Math.floor(Date.now() / 1000) + OPERATOR_TOKEN_EXPIRY_SECONDS;
+  const jti = crypto.randomUUID();
   const bodyB64 = base64urlEncode(
-    enc.encode(JSON.stringify({ ...payload, exp }))
+    enc.encode(JSON.stringify({ ...payload, exp, jti }))
   );
 
   const signingInput = `${headerB64}.${bodyB64}`;
@@ -338,7 +438,18 @@ export async function verifyOperatorToken(request, env) {
       };
     }
 
-    // ── 6. Verificar role — 403 si es un token de otro dominio ───────────
+    // ── 6. Verificar revocación (logout real) ─────────────────────────────
+    if (payload.jti && await isOperatorJtiRevokedAsync(payload.jti, env)) {
+      return {
+        ok: false,
+        response: operatorAuthFailure(
+          request,
+          { error: 'No autorizado: sesión revocada', code: 'token_revocado' },
+        ),
+      };
+    }
+
+    // ── 7. Verificar role — 403 si es un token de otro dominio ───────────
     if (payload.role !== 'operator') {
       return {
         ok: false,

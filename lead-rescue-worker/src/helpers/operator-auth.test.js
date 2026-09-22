@@ -2,7 +2,7 @@
 // Wave 1 — T2: Smoke tests del helper de autenticación de operadores.
 // Deben pasar ANTES de avanzar a Wave 2 (migración de driver-auth.js).
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   OPERATOR_SESSION_COOKIE,
   createOperatorSessionCookie,
@@ -10,6 +10,10 @@ import {
   verifyOperatorTenant,
   verifyOperatorToken,
   verifySameOrigin,
+  revokeOperatorJti,
+  isOperatorJtiRevoked,
+  isOperatorJtiRevokedAsync,
+  clearOperatorRevocations,
 } from './operator-auth.js';
 
 // ─── Fixture compartido ───────────────────────────────────────────────────────
@@ -156,6 +160,20 @@ describe('operator-auth — tests adicionales (Wave 4)', () => {
     expect((await result.response.json()).code).toBe('tenant_incorrecto');
   });
 
+  it('verifyOperatorTenant rechaza tenant diferente aunque el Content-Type declarado sea falso', async () => {
+    // Content-Type: text/plain con body JSON — los handlers reales usan
+    // request.json() sin mirar el header, así que esto no debe evadir el chequeo.
+    const req = new Request('https://worker.test/api/recalcular-scoring', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ tenant_id: 'otro_tenant', rut: '11111111-1' }),
+    });
+    const result = await verifyOperatorTenant(req, 'empresa_base');
+    expect(result.ok).toBe(false);
+    expect(result.response.status).toBe(403);
+    expect((await result.response.json()).code).toBe('tenant_incorrecto');
+  });
+
   it('verifyOperatorTenant permite tenant firmado en query', async () => {
     const req = new Request(
       'https://worker.test/api/gps/live?tenant_id=empresa_base',
@@ -245,5 +263,69 @@ describe('operator-auth — tests adicionales (Wave 4)', () => {
   it('verifyCredentials: password vacio retorna false sin lanzar excepcion', async () => {
     const result = await verifyCredentials('admin', '', TEST_ENV_FULL);
     expect(result).toBe(false);
+  });
+});
+
+// ─── Revocación de sesión (logout real) ──────────────────────────────────────
+// Antes: logout solo borraba la cookie — el JWT seguía siendo válido hasta
+// sus 8h de exp si alguien lo había copiado. Mismo patrón que driver-auth.js.
+describe('operator-auth — revocación de jti (logout real)', () => {
+  beforeEach(() => {
+    clearOperatorRevocations();
+  });
+
+  it('signOperatorToken incluye un jti único por token', async () => {
+    const t1 = await signOperatorToken(TEST_PAYLOAD, TEST_ENV);
+    const t2 = await signOperatorToken(TEST_PAYLOAD, TEST_ENV);
+    const r1 = await verifyOperatorToken(makeRequest(t1), TEST_ENV);
+    const r2 = await verifyOperatorToken(makeRequest(t2), TEST_ENV);
+    expect(r1.payload.jti).toBeTruthy();
+    expect(r2.payload.jti).toBeTruthy();
+    expect(r1.payload.jti).not.toBe(r2.payload.jti);
+  });
+
+  it('un token válido deja de pasar verifyOperatorToken después de revocar su jti', async () => {
+    const token = await signOperatorToken(TEST_PAYLOAD, TEST_ENV);
+    const before = await verifyOperatorToken(makeRequest(token), TEST_ENV);
+    expect(before.ok).toBe(true);
+
+    await revokeOperatorJti(before.payload.jti, before.payload.exp);
+
+    const after = await verifyOperatorToken(makeRequest(token), TEST_ENV);
+    expect(after.ok).toBe(false);
+    const body = await after.response.json();
+    expect(body.code).toBe('token_revocado');
+  });
+
+  it('isOperatorJtiRevoked (sync, memoria) refleja la revocación inmediatamente', async () => {
+    await revokeOperatorJti('jti-test-1', Math.floor(Date.now() / 1000) + 3600);
+    expect(isOperatorJtiRevoked('jti-test-1')).toBe(true);
+    expect(isOperatorJtiRevoked('jti-nunca-revocado')).toBe(false);
+  });
+
+  it('un jti revocado ya vencido deja de contar como revocado', () => {
+    expect(isOperatorJtiRevoked('jti-inexistente')).toBe(false);
+  });
+
+  it('isOperatorJtiRevokedAsync consulta el KV cuando el jti no está en memoria del isolate', async () => {
+    const kvStore = new Map();
+    const fakeKv = {
+      get: async (key) => kvStore.get(key) ?? null,
+      put: async (key, value) => { kvStore.set(key, value); },
+    };
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    await revokeOperatorJti('jti-cross-isolate', exp, { DRIVER_REVOKED_JTI: fakeKv });
+
+    // Simula OTRO isolate: limpiar la memoria local, solo debe quedar en KV.
+    clearOperatorRevocations();
+    expect(isOperatorJtiRevoked('jti-cross-isolate')).toBe(false);
+    expect(await isOperatorJtiRevokedAsync('jti-cross-isolate', { DRIVER_REVOKED_JTI: fakeKv })).toBe(true);
+  });
+
+  it('sin KV binding, revokeOperatorJti igual revoca en memoria (best-effort)', async () => {
+    const result = await revokeOperatorJti('jti-sin-kv', Math.floor(Date.now() / 1000) + 3600, {});
+    expect(result.ok).toBe(true);
+    expect(result.persisted).toBe(false);
+    expect(isOperatorJtiRevoked('jti-sin-kv')).toBe(true);
   });
 });

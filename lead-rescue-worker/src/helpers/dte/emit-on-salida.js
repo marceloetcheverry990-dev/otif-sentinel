@@ -84,7 +84,7 @@ export async function emitGuiasForTrip(env, supabase, ctx) {
           .maybeSingle()
       ).data;
 
-    if (shouldSkipExisting(existing)) {
+    if (shouldSkipExisting(existing, { mode })) {
       stats.skipped += 1;
       continue;
     }
@@ -216,11 +216,17 @@ export async function emitGuiasForTrip(env, supabase, ctx) {
       }
     }
 
-    await upsertGuiaRow(supabase, existing, baseGuiaRow({
+    const claim = await upsertGuiaRow(supabase, existing, baseGuiaRow({
       tenant_id, trip_id, ot, tipo, conductor_rut, conductor_nombre, patente,
       origen, destino_direccion, destino_comuna, payload, fechaFija, fechaEstimada,
       rowTsSource, estado: 'EMITTING', error: null, proveedor: dteEnv.DTE_PROVIDER || 'stub',
     }));
+    if (!claim.claimed) {
+      // Otra llamada concurrente ya está emitiendo (o emitió) esta guía —
+      // no llamar al proveedor real de nuevo (evita un DTE duplicado).
+      stats.skipped += 1;
+      continue;
+    }
 
     let result;
     try {
@@ -369,11 +375,14 @@ export function resolveDestinoFromOrden(ot) {
   return { direccion, comuna };
 }
 
-export function shouldSkipExisting(existing) {
+export function shouldSkipExisting(existing, { mode = 'salida' } = {}) {
   if (!existing) return false;
   if (existing.estado === 'EMITIDA') return true;
-  // Stub ya emitido en demo/staging: no reescribir en cada SALIDA de parada
-  if (existing.estado === 'STUB') return true;
+  // Stub ya emitido en demo/staging: no reescribir en cada SALIDA de parada.
+  // En modo retry SÍ debe poder promoverse STUB → emisión real — para eso
+  // loadOrdenesForEmit incluye 'STUB' en RETRY_ESTADOS; si se salta igual acá,
+  // el reintento nunca hace nada con las guías STUB que fue a buscar.
+  if (existing.estado === 'STUB' && mode !== 'retry') return true;
   if (existing.estado === 'EMITTING') {
     const updated = existing.updated_at ? Date.parse(existing.updated_at) : 0;
     if (Number.isFinite(updated) && Date.now() - updated < EMITTING_LOCK_MS) {
@@ -387,12 +396,34 @@ export function shouldSkipExisting(existing) {
   return false;
 }
 
-async function upsertGuiaRow(supabase, existing, row) {
+/**
+ * @returns {Promise<{claimed: boolean, error?: string}>} claimed=false significa
+ * que otra llamada concurrente ya tiene la fila para este (tenant_id, ot_id)
+ * — el caller NO debe seguir adelante y llamar al proveedor real de nuevo.
+ */
+export async function upsertGuiaRow(supabase, existing, row) {
   if (existing?.id) {
-    await supabase.from('guias_despacho').update(row).eq('id', existing.id);
-  } else {
-    await supabase.from('guias_despacho').insert([{ ...row, created_at: new Date().toISOString() }]);
+    const { error } = await supabase.from('guias_despacho').update(row).eq('id', existing.id);
+    if (error) {
+      console.warn('[DTE] upsertGuiaRow update error', error.message);
+      return { claimed: false, error: error.message };
+    }
+    return { claimed: true };
   }
+  const { error } = await supabase
+    .from('guias_despacho')
+    .insert([{ ...row, created_at: new Date().toISOString() }]);
+  if (error) {
+    // 23505 = unique_violation en (tenant_id, ot_id): otro proceso concurrente
+    // (dos SALIDA casi simultáneas, o mobile-sync + LLEGADA en carrera) ya
+    // insertó la fila para esta OT. No es un error real — es la señal de que
+    // NO debemos emitir de nuevo.
+    if (error.code !== '23505') {
+      console.warn('[DTE] upsertGuiaRow insert error', error.message);
+    }
+    return { claimed: false, error: error.message };
+  }
+  return { claimed: true };
 }
 
 function normalizeTipoTraslado(raw) {

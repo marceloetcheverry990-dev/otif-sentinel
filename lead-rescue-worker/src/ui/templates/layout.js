@@ -108,6 +108,7 @@ export const renderLayout = ({
           <div class="tabs-header" role="tablist">
             <button class="tab-btn active" role="tab" aria-selected="true" data-target="panel-flota">🚚 Flota (${flotaVisibleCount})</button>
             <button class="tab-btn" role="tab" aria-selected="false" data-target="panel-backlog">📋 Pedidos Pendientes (${ordenesPendientes.length})</button>
+            ${APP_CONFIG.WMS?.ENABLED || safeParseJSON(safeConfigJson, {}).wms_enabled ? '<button class="tab-btn" role="tab" aria-selected="false" data-target="panel-bodega">Bodega</button>' : ''}
           </div>
 
           <div id="search-container" style="padding: 1rem 1rem 0 1rem;">
@@ -159,7 +160,7 @@ export const renderLayout = ({
                         <div style="display: flex; gap: 6px; position: relative; z-index: 10;">
                           <button class="btn-share-route" data-trip="${escapeHTML(v.trip_id)}" onclick="event.stopPropagation(); if(typeof window.generarEnlacePublico === 'function') window.generarEnlacePublico(this);" style="padding: 4px 8px; font-size: 0.75rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s; position: relative; z-index: 100; pointer-events: auto;" title="Compartir ruta pública">📤 Compartir
                           </button>
-                          <button class="btn-chat-trigger" data-trip="${escapeHTML(v.trip_id)}" data-rut="${v.chofer_id || ''}" onclick="event.stopPropagation(); if(typeof window.abrirChat === 'function') window.abrirChat(this);" style="position: relative; z-index: 100; pointer-events: auto;">💬 Chat
+                          <button class="btn-chat-trigger" data-trip="${escapeHTML(v.trip_id)}" data-rut="${escapeHTML(v.chofer_id || '')}" onclick="event.stopPropagation(); if(typeof window.abrirChat === 'function') window.abrirChat(this);" style="position: relative; z-index: 100; pointer-events: auto;">💬 Chat
                           </button>
                           ${esRutaRapida ? `<button class="btn-cancel-spot" data-trip="${escapeHTML(v.trip_id)}" onclick="event.stopPropagation();window.handleCancelSpot(this)" style="padding:4px 8px;font-size:0.75rem;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid #ef4444;border-radius:6px;cursor:pointer;font-weight:600;z-index:100;position:relative;pointer-events:auto;" title="Cancelar ruta r&aacute;pida">&#128465;&#65039; Cancelar</button>` : ''}
                         </div>
@@ -181,7 +182,7 @@ export const renderLayout = ({
 
                   <div class="card-body">
                     <div style="display: flex; gap: 0.5rem; width: 100%;">
-                      <select id="select-${safeTripId}" class="chofer-select ${v.chofer_id ? 'assigned' : ''} ${choferLocked ? 'locked' : ''}" style="flex: 1;" data-real-trip="${encodeURIComponent(v.trip_id)}" data-previous="${v.chofer_id || ''}" ${choferLocked ? 'disabled title="Chofer bloqueado: el viaje ya está en ruta"' : ''}>
+                      <select id="select-${safeTripId}" class="chofer-select ${v.chofer_id ? 'assigned' : ''} ${choferLocked ? 'locked' : ''}" style="flex: 1;" data-real-trip="${encodeURIComponent(v.trip_id)}" data-previous="${escapeHTML(v.chofer_id || '')}" ${choferLocked ? 'disabled title="Chofer bloqueado: el viaje ya está en ruta"' : ''}>
                         ${choferLocked ? '' : '<option value="">-- Asignar Chofer --</option>'}
                         ${listaChoferes.map(c => `<option value="${escapeHTML(c.chofer_id)}" ${String(v.chofer_id) === String(c.chofer_id) ? 'selected' : ''}>${escapeHTML(c.nombre_completo)} (⭐${c.skill_score})</option>`).join('')}
                       </select>
@@ -193,7 +194,7 @@ export const renderLayout = ({
                         
                         const intv = choferAsig.gps_interval_seconds || 60;
                         return `
-                        <select class="gps-interval-select" data-rut="${choferAsig.rut}" style="width: 90px; font-size: 0.75rem; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); cursor: pointer;" title="Frecuencia GPS de la App">
+                        <select class="gps-interval-select" data-rut="${escapeHTML(choferAsig.rut)}" style="width: 90px; font-size: 0.75rem; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text-main); cursor: pointer;" title="Frecuencia GPS de la App">
                           <option value="10" ${intv == 10 ? 'selected' : ''}>⚡ 10s</option>
                           <option value="30" ${intv == 30 ? 'selected' : ''}>🚗 30s</option>
                           <option value="60" ${intv == 60 ? 'selected' : ''}>📱 1m</option>
@@ -218,6 +219,45 @@ export const renderLayout = ({
                         const dotColor = isEntregado ? 'var(--success)' : (isLate ? 'var(--danger)' : 'var(--primary)');
                         const isRetiro = p.tipo_movimiento === 'RETIRO';
                         const movBadge = isRetiro ? `<span class="badge b-orange" style="margin-left:4px; font-size:0.6rem;">⬆️ Retiro</span>` : `<span class="badge b-green" style="margin-left:4px; font-size:0.6rem;">⬇️ Entrega</span>`;
+                        const isRechazado = p.estado_operacional === APP_CONFIG.ESTADOS.RECHAZADO;
+
+                        // Badge guía Res. 154 — mismo estado-máquina que el re-render del poll
+                        // (pollingYEventos.js), para que no desaparezca en el primer render.
+                        const ge = String(p.guia_estado || '').toUpperCase();
+                        const guiaOtAttr = String(p.ot_id || '').replace(/'/g, '');
+                        const guiaTripAttr = String(v.trip_id || '').replace(/'/g, '');
+                        const guiaVerClick = `event.stopPropagation();window.verGuiaElectronica&&window.verGuiaElectronica('${guiaOtAttr}','${guiaTripAttr}')`;
+                        const guiaRetryClick = `event.stopPropagation();window.retryGuiaTrip&&window.retryGuiaTrip('${guiaTripAttr}')`;
+                        const guiaBadgeStyle = 'font-size:0.55rem;margin-top:2px;cursor:pointer;';
+                        let guiaHtml = '';
+                        if (ge === 'EMITIDA' || (ge === 'SKIPPED' && p.guia_folio && !String(p.guia_folio).startsWith('STUB-'))) {
+                          guiaHtml = `<div class="badge b-green" style="${guiaBadgeStyle}" title="Ver detalle · Folio ${escapeHTML(p.guia_folio || '')}" onclick="${guiaVerClick}">Guía electrónica</div>`;
+                        } else if (ge === 'STUB' || (ge === 'SKIPPED' && (!p.guia_folio || String(p.guia_folio).startsWith('STUB-')))) {
+                          guiaHtml = `<div class="badge b-green" style="${guiaBadgeStyle}" title="Ver detalle guía Res.154" onclick="${guiaVerClick}">Guía electrónica</div>`;
+                        } else if (ge === 'REVIEW') {
+                          guiaHtml = `<div class="badge b-orange" style="${guiaBadgeStyle}" title="${escapeHTML(p.guia_error || 'Confirmar hora de emisión')}" onclick="${guiaRetryClick}">Guía REV</div>`;
+                        } else if (ge === 'ERROR') {
+                          guiaHtml = `<div class="badge b-red" style="${guiaBadgeStyle}" title="${escapeHTML(p.guia_error || 'Error')}" onclick="${guiaRetryClick}">Guía ERR</div>`;
+                        } else if (ge === 'PENDING' || ge === 'EMITTING') {
+                          guiaHtml = `<div class="badge b-orange" style="font-size:0.55rem;margin-top:2px;">Guía…</div>`;
+                        }
+
+                        // Links de POD (foto/firma) — igual que el poll.
+                        const hrefFoto = safeHttpUrl(p.evidencia_url);
+                        const hrefFirma = safeHttpUrl(p.firma_url);
+                        let podLinks = '';
+                        if (hrefFoto || hrefFirma) {
+                          podLinks = '<span style="display:inline-flex; gap:4px;">' +
+                            (hrefFoto ? `<a href="${hrefFoto}" target="_blank" rel="noopener noreferrer" style="font-size:0.65rem; color:#38bdf8;">Foto</a>` : '') +
+                            (hrefFirma ? `<a href="${hrefFirma}" target="_blank" rel="noopener noreferrer" style="font-size:0.65rem; color:#a78bfa;">Firma</a>` : '') +
+                            '</span>';
+                        }
+
+                        // Botón de edición — solo paradas de Ruta Rápida (ot_id empieza con SPOT-), igual que el poll.
+                        let editBtn = '';
+                        if (String(p.ot_id || '').startsWith('SPOT-') && !isEntregado && !isRechazado) {
+                          editBtn = `<button class="btn-edit-dir" data-ot="${escapeHTML(p.ot_id)}" data-dir="${escapeHTML(meta?.direccion_entrega || '')}" onclick="event.stopPropagation();window.handleEditDir(this)" style="padding:3px 8px; font-size:0.7rem; background:rgba(99,102,241,0.2); color:#818cf8; border:1px solid #6366f1; border-radius:4px; cursor:pointer; font-weight:600;" title="Editar dirección de entrega">✎ Editar</button>`;
+                        }
 
                         let colacionHtml = '';
                         if (meta.routing?.pausa_colacion_aplicada === true) {
@@ -244,10 +284,13 @@ export const renderLayout = ({
                                ${safeHttpUrl(p.uri)
                                  ? `<a href="${safeHttpUrl(p.uri)}" target="_blank" rel="noopener noreferrer" class="btn-doc">📄 Ver Documento</a>`
                                  : `<button disabled class="btn-doc">Documento Pendiente</button>`}
+                               ${podLinks}
+                               ${editBtn}
                             </div>
                           </div>
                           <div style="text-align: right; margin-left: auto;">
                             <div class="badge ${isEntregado ? 'b-green' : (p.estado_operacional === APP_CONFIG.ESTADOS.RECHAZADO ? 'b-red' : (p.estado_operacional === 'EN_SITIO' ? 'b-orange' : 'b-orange'))}" style="font-size:0.6rem; margin-bottom: 2px;"> ${escapeHTML(p.estado_operacional || p.estado || 'PENDIENTE')}</div>
+                              ${guiaHtml}
                               <div style="font-size: 0.65rem; font-weight: ${isLate && !isEntregado ? '800' : '500'}; color: ${isLate && !isEntregado ? 'var(--danger)' : 'var(--text-muted)'};">
                               ${(() => {
                                 if (isEntregado || p.estado_operacional === APP_CONFIG.ESTADOS.RECHAZADO) {
@@ -310,6 +353,10 @@ export const renderLayout = ({
                 `;
               }).join('')}
             </div>
+
+            ${APP_CONFIG.WMS?.ENABLED || safeParseJSON(safeConfigJson, {}).wms_enabled
+              ? '<div id="panel-bodega" class="tab-content" role="tabpanel"><div class="bodega-muted" style="padding:0.75rem 0;">Cargando bodega…</div></div>'
+              : ''}
           </div>
         </aside>
 

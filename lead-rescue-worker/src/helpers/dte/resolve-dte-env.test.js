@@ -37,7 +37,7 @@ describe('resolveDteEnv (R2/R4)', () => {
   });
 
   it('R4: descifra dte_api_token enc$v1$', async () => {
-    const sealed = await encryptSecret('tenant-secret-token', SECRET);
+    const sealed = await encryptSecret('tenant-secret-token', { ...SECRET, DTE_ALLOW_SHARED_ENCRYPTION_KEY: 'true' });
     const env = await resolveDteEnv(
       { DTE_PROVIDER: 'simpleapi', ...SECRET },
       {

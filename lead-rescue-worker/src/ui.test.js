@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderControlTowerDashboard } from './ui.js';
+import { sortViajesSeguros } from './ui/server/calculosViaje.js';
 
 // ---------------------------------------------------------------------------
 // Implementación mínima de escapeHTML para los tests
@@ -337,5 +338,123 @@ describe('renderControlTowerDashboard — Tests de humo', () => {
     expect(match[1]).toContain('\\u003c');
     const parsed = JSON.parse(match[1]);
     expect(parsed[0].nombre_completo).toContain('</script>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paridad SSR vs. poll: botones de guía/POD/edición (antes ausentes en el
+// primer render — solo el re-render del poll en pollingYEventos.js los tenía).
+// ---------------------------------------------------------------------------
+describe('renderControlTowerDashboard — paridad con el re-render del poll (guía/POD/edición)', () => {
+  const viajeConGuiaPodYEdicion = {
+    trip_id: 'SPOT-20260101-TEST01',
+    chofer: 'Juan Pérez',
+    chofer_id: 'CHF-01',
+    detalle_paradas: [
+      {
+        ot_id: 'SPOT-20260101-TEST01-01',
+        cliente: 'Cliente Con Guía',
+        monto_total: 50000,
+        estado_operacional: 'EN_RUTA',
+        eta: etaOk,
+        fecha_hora_sla: slaFuturo,
+        hora_real: null,
+        guia_estado: 'EMITIDA',
+        guia_folio: '12345',
+        evidencia_url: 'https://example.com/foto.jpg',
+        firma_url: 'https://example.com/firma.png',
+        metadata: null,
+      },
+    ],
+  };
+
+  const inputConGuiaPodYEdicion = [
+    ordenes,
+    perfiles,
+    null,
+    escapeHTML,
+    null,
+    [viajeConGuiaPodYEdicion],
+    listaChoferes,
+  ];
+
+  // El HTML final incluye, después del contenido SSR, el script cliente
+  // completo embebido (pollingYEventos.js) — cuyo texto fuente también
+  // contiene los mismos literales ('btn-edit-dir', 'Guía electrónica', etc.)
+  // porque construye ese HTML dinámicamente en cada poll. Buscar esos
+  // literales en el HTML completo daría un falso positivo aunque el SSR
+  // NO los hubiera renderizado. Por eso los tests de paridad recortan solo
+  // la porción servida antes de que arranque ese script embebido.
+  function ssrOnly(html) {
+    const scriptStart = html.indexOf('window._TENANT_ID = CONFIG.tenant_id');
+    expect(scriptStart).toBeGreaterThan(-1);
+    return html.slice(0, scriptStart);
+  }
+
+  it('el primer render (SSR) ya incluye el badge de guía electrónica', () => {
+    const html = ssrOnly(renderControlTowerDashboard(...inputConGuiaPodYEdicion));
+    expect(html).toContain('Guía electrónica');
+  });
+
+  it('el primer render (SSR) ya incluye los links de POD (foto/firma)', () => {
+    const html = ssrOnly(renderControlTowerDashboard(...inputConGuiaPodYEdicion));
+    expect(html).toContain('https://example.com/foto.jpg');
+    expect(html).toContain('https://example.com/firma.png');
+    expect(html).toContain('>Foto<');
+    expect(html).toContain('>Firma<');
+  });
+
+  it('el primer render (SSR) ya incluye el botón de editar dirección para paradas SPOT abiertas', () => {
+    const html = ssrOnly(renderControlTowerDashboard(...inputConGuiaPodYEdicion));
+    expect(html).toContain('btn-edit-dir');
+    expect(html).toContain('Editar dirección de entrega');
+  });
+
+  it('el botón de editar NO aparece si la parada ya está entregada', () => {
+    const entregado = {
+      ...viajeConGuiaPodYEdicion,
+      detalle_paradas: [{
+        ...viajeConGuiaPodYEdicion.detalle_paradas[0],
+        estado_operacional: 'ENTREGADO',
+        hora_real: new Date('2026-01-01T12:00:00.000Z').toISOString(),
+      }],
+    };
+    const html = ssrOnly(
+      renderControlTowerDashboard(ordenes, perfiles, null, escapeHTML, null, [entregado], listaChoferes)
+    );
+    expect(html).not.toContain('btn-edit-dir');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sortViajesSeguros: mismo comparador que pollingYEventos.js repite en el
+// cliente (sortViajesPorRiesgoCliente) para que el orden no cambie en cada poll.
+// ---------------------------------------------------------------------------
+describe('sortViajesSeguros — orden riesgo > sla_risk_score > valor > trip_id', () => {
+  it('un viaje con entregas_rechazadas > 0 va antes que uno sin riesgo', () => {
+    const viajes = [
+      { trip_id: 'B', entregas_rechazadas: 0, valor_total_viaje: 999999 },
+      { trip_id: 'A', entregas_rechazadas: 1, valor_total_viaje: 1 },
+    ];
+    sortViajesSeguros(viajes);
+    expect(viajes[0].trip_id).toBe('A');
+  });
+
+  it('a igual riesgo, gana mayor valor_total_viaje', () => {
+    const viajes = [
+      { trip_id: 'LOW', entregas_rechazadas: 0, valor_total_viaje: 100 },
+      { trip_id: 'HIGH', entregas_rechazadas: 0, valor_total_viaje: 500 },
+    ];
+    sortViajesSeguros(viajes);
+    expect(viajes[0].trip_id).toBe('HIGH');
+  });
+
+  it('a igual riesgo y valor, desempata por trip_id alfabético', () => {
+    const viajes = [
+      { trip_id: 'ZETA', entregas_rechazadas: 0, valor_total_viaje: 100 },
+      { trip_id: 'ALFA', entregas_rechazadas: 0, valor_total_viaje: 100 },
+    ];
+    sortViajesSeguros(viajes);
+    expect(viajes[0].trip_id).toBe('ALFA');
   });
 });

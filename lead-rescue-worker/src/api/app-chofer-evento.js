@@ -183,17 +183,19 @@ export async function handleChoferEvento(request, env, ctx) {
         ? (() => { try { return JSON.parse(metaRawEarly); } catch { return {}; } })()
         : (metaRawEarly || {});
 
-    let podReq = resolvePodRequirements({});
+    let podReq = resolvePodRequirements({ env });
     if (tipo_evento === 'ENTREGA') {
       const tenantSettings = await getTenantSettings(env, tenant_id);
       podReq = resolvePodRequirements({
         tenantSettings,
         orderMetadata: metaEarly,
+        env,
       });
       if (metaEarly.origen === 'RUTA_RAPIDA') {
         podReq = resolvePodRequirements({
           tenantSettings: { pod_requirements: { foto: false, firma: false, scan: false, notas: false } },
           orderMetadata: metaEarly,
+          env,
         });
       }
       if (podReq.foto && !foto_url) {

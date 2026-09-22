@@ -10,6 +10,19 @@ export const DEFAULT_POD_REQUIREMENTS = Object.freeze({
   notas: false,
 });
 
+/** Piloto: POD_SCAN_ENABLED=false desconecta escaneo QR sin borrar código. */
+export function isPodScanEnabled(env) {
+  const v = String(env?.POD_SCAN_ENABLED ?? 'false').toLowerCase();
+  return v === 'true' || v === '1' || v === 'yes';
+}
+
+function applyPilotPodFlags(req, env) {
+  if (env && !isPodScanEnabled(env)) {
+    return { ...req, scan: false };
+  }
+  return req;
+}
+
 function coerceBool(v, fallback) {
   if (typeof v === 'boolean') return v;
   if (v === 0 || v === '0' || v === 'false' || v === 'False') return false;
@@ -31,11 +44,14 @@ export function normalizePodRequirements(raw) {
 /**
  * Orden metadata.pod_requirements gana sobre tenant.
  */
-export function resolvePodRequirements({ tenantSettings, orderMetadata } = {}) {
+export function resolvePodRequirements({ tenantSettings, orderMetadata, env } = {}) {
   const fromTenant = normalizePodRequirements(tenantSettings?.pod_requirements);
   const meta = orderMetadata && typeof orderMetadata === 'object' ? orderMetadata : {};
+  let resolved;
   if (meta.pod_requirements && typeof meta.pod_requirements === 'object') {
-    return normalizePodRequirements({ ...fromTenant, ...meta.pod_requirements });
+    resolved = normalizePodRequirements({ ...fromTenant, ...meta.pod_requirements });
+  } else {
+    resolved = fromTenant;
   }
-  return fromTenant;
+  return applyPilotPodFlags(resolved, env);
 }

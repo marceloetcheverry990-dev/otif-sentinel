@@ -14,6 +14,7 @@ import { computeScanToken } from '../helpers/scan-token.js';
 import { parseFlotaDisponible } from '../helpers/optimizer-flota.js';
 import { resolvePerfilPesos } from '../helpers/perfil-pesos.js';
 import { fetchMapboxDrivingRoute } from '../helpers/mapbox-directions.js';
+import { hasHazmat, hasFood } from '../helpers/cargo-constraints.js';
 
 export async function tryOptimizerLock(env, tenantId) {
   return withDb(env, async (client) => {
@@ -524,9 +525,7 @@ export async function optimizarRutas(request, env, ctx, operator = null) {
         const choferValido = viaje.tagsRequeridos.every(tag => ch.tags.includes(tag));
         if (!choferValido) continue;
         // Segregación: no asignar HAZMAT+FOOD mezclados (ya filtrado en solver; reforzar)
-        const haz = viaje.tagsRequeridos.some((t) => ['HAZMAT', 'ADR', 'PELGEROSO'].includes(String(t).toUpperCase()));
-        const food = viaje.tagsRequeridos.some((t) => ['FOOD', 'ALIMENTO', 'ALIMENTOS', 'FRIO_ALIMENTO'].includes(String(t).toUpperCase()));
-        if (haz && food) continue;
+        if (hasHazmat(viaje.tagsRequeridos) && hasFood(viaje.tagsRequeridos)) continue;
         const capacidadRestante = Number(ch.capacidad_volumen || 0) - Number(ch.volumen_asignado || 0);
         if (volumenViaje > capacidadRestante + 1e-6) continue;
         const pesoRestante = Number(ch.capacidad_peso || 99999) - Number(ch.peso_asignado || 0);

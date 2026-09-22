@@ -34,7 +34,7 @@ function timingSafeEqualBytes(a, b) {
   return diff === 0;
 }
 
-function timingSafeEqualString(a, b) {
+export function timingSafeEqualString(a, b) {
   const enc = new TextEncoder();
   const aa = enc.encode(String(a ?? ''));
   const bb = enc.encode(String(b ?? ''));

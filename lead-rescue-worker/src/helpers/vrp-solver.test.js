@@ -123,6 +123,27 @@ describe('vrp-solver', () => {
     expect(one.routes.flat()).toHaveLength(8);
   });
 
+  it('nunca mezcla PELIGROSO (bien escrito) con ALIMENTO, ni siquiera forzando 1 solo vehículo', () => {
+    // PELIGROSO (no el typo PELGEROSO) — la lista vieja de routeSegregationOk
+    // no lo reconocía como HAZMAT, así que este caso se colaba.
+    const stops = [];
+    for (let i = 0; i < 6; i++) {
+      const s = stop(`OT-${i}`, -33.45 + i * 0.001, -70.66 + i * 0.001, 1);
+      if (i === 0) s.tags = ['PELIGROSO'];
+      if (i === 1) s.tags = ['ALIMENTO'];
+      stops.push(s);
+    }
+    const result = solveVrp(stops, { capacity: 200, maxVehicles: 1, startMs: Date.now() });
+    for (const route of result.routes) {
+      const tags = route.flatMap((o) => o.tags || []);
+      const haz = tags.includes('PELIGROSO');
+      const food = tags.includes('ALIMENTO');
+      expect(haz && food).toBe(false);
+    }
+    // Las 6 OTs se siguen asignando todas (a alguna ruta), ninguna se pierde.
+    expect(result.routes.flat().map((o) => o.ot_id).sort()).toEqual(stops.map((o) => o.ot_id).sort());
+  });
+
   it('splitUpToVehicles no inventa más rutas que paradas', () => {
     const only = [[stop('A', -33.45, -70.66), stop('B', -33.46, -70.67)]];
     const got = splitUpToVehicles(only, 9, DEFAULT_DEPOT);

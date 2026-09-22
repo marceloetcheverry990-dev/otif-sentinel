@@ -14,18 +14,38 @@ export function isEncryptedSecret(value) {
   return typeof value === 'string' && value.startsWith(PREFIX);
 }
 
-function resolveKeyMaterial(env) {
-  const material = env?.DTE_TOKEN_ENCRYPTION_KEY || env?.DASHBOARD_SECRET;
-  if (!material || typeof material !== 'string' || material.length < MIN_KEY_CHARS) {
+/**
+ * Descifrar (datos ya sellados) siempre puede caer a DASHBOARD_SECRET por
+ * compatibilidad — no rompe secretos existentes. Cifrar (sellar uno NUEVO)
+ * exige DTE_TOKEN_ENCRYPTION_KEY dedicada por defecto: reusar DASHBOARD_SECRET
+ * (que también firma sesiones/JWT) para un secreto nuevo es evitable y no
+ * debería ser el default. DTE_ALLOW_SHARED_ENCRYPTION_KEY=true restaura el
+ * comportamiento anterior si hace falta.
+ */
+function resolveKeyMaterial(env, { forEncrypt = false } = {}) {
+  const dedicated = env?.DTE_TOKEN_ENCRYPTION_KEY;
+  if (dedicated && typeof dedicated === 'string' && dedicated.length >= MIN_KEY_CHARS) {
+    return dedicated;
+  }
+
+  if (forEncrypt && String(env?.DTE_ALLOW_SHARED_ENCRYPTION_KEY || '').toLowerCase() !== 'true') {
+    throw new Error(
+      '[dte-secret] DTE_TOKEN_ENCRYPTION_KEY (≥32 chars) requerida para cifrar un secreto nuevo ' +
+      '(o DTE_ALLOW_SHARED_ENCRYPTION_KEY=true para reusar DASHBOARD_SECRET)'
+    );
+  }
+
+  const fallback = env?.DASHBOARD_SECRET;
+  if (!fallback || typeof fallback !== 'string' || fallback.length < MIN_KEY_CHARS) {
     throw new Error(
       '[dte-secret] DTE_TOKEN_ENCRYPTION_KEY o DASHBOARD_SECRET (≥32 chars) requerido para cifrar/descifrar'
     );
   }
-  return material;
+  return fallback;
 }
 
 async function importAesKey(env, usages) {
-  const material = resolveKeyMaterial(env);
+  const material = resolveKeyMaterial(env, { forEncrypt: usages.includes('encrypt') });
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material));
   return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, usages);
 }

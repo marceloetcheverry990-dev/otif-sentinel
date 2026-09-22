@@ -176,6 +176,8 @@ export function cleanSLACache() {
 
 export const WebhookSchema = z.object({
   ot_id: z.string().trim().max(120),
+  // Opcional: si el caller no lo manda, wms.js cae a WMS_WEBHOOK_TENANT_ID / MONITORING_TENANT_ID.
+  tenant_id: z.string().trim().min(1).max(64).optional(),
   produccion_estandar: z.coerce.number(),
   produccion_real: z.coerce.number(),
   horas_para_sla: z.coerce.number(),
@@ -208,6 +210,21 @@ export const OrderIngestItemSchema = z.object({
   requires_hazmat: z.boolean().optional(),
   /** Bodega preferida (metadata); el ruteo usa depot_id del operador si no se fija aquí. */
   depot_id: z.string().trim().max(64).optional(),
+  /**
+   * Líneas de pedido (SKU + cantidad). Si el tenant tiene WMS activo y la orden
+   * trae líneas, la ingesta reserva stock antes de dejarla ruteable: alcanza →
+   * PENDIENTE_PICKING, no alcanza → QUIEBRE (no ruteable). Sin líneas, la orden
+   * entra directo a PENDIENTE_RUTEO como siempre.
+   */
+  lineas: z
+    .array(
+      z.object({
+        sku: z.string().trim().min(1).max(64),
+        qty: z.coerce.number().positive(),
+      })
+    )
+    .max(100)
+    .optional(),
 });
 
 /** Payload batch para ingestión genérica de órdenes logísticas. */
