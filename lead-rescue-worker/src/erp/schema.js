@@ -128,6 +128,37 @@ export async function ensureErpSchema(client) {
     )
   `);
 
+  // Inventario físico (IKPF/ISEG en SAP): documento de conteo por centro.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS erp_inventario_fisico (
+      tenant_id          VARCHAR(64)  NOT NULL,
+      iblnr              VARCHAR(10)  NOT NULL,
+      centro             VARCHAR(64)  NOT NULL,
+      fecha_planificada  DATE         NOT NULL DEFAULT CURRENT_DATE,
+      estado             VARCHAR(14)  NOT NULL DEFAULT 'CREADO',
+      texto              VARCHAR(160),
+      mblnr              VARCHAR(10),
+      created_by         VARCHAR(64),
+      created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      contabilizado_at   TIMESTAMPTZ,
+      PRIMARY KEY (tenant_id, iblnr)
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS erp_inventario_fisico_pos (
+      tenant_id         VARCHAR(64)    NOT NULL,
+      iblnr             VARCHAR(10)    NOT NULL,
+      zeile             INTEGER        NOT NULL,
+      sku               VARCHAR(64)    NOT NULL,
+      cantidad_contada  NUMERIC(14, 3),
+      contado_por       VARCHAR(64),
+      contado_at        TIMESTAMPTZ,
+      qty_libro         NUMERIC(14, 3),
+      diferencia        NUMERIC(14, 3),
+      PRIMARY KEY (tenant_id, iblnr, zeile)
+    )
+  `);
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS erp_documentos_material (
       tenant_id              VARCHAR(64)  NOT NULL,

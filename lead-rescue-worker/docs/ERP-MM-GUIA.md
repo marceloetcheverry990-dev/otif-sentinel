@@ -36,7 +36,7 @@ aprendas acá te sirve en un SAP real.
 | **552** | Anulación de un 551 | MIGO |
 | **561** | Entrada inicial de stock (alta de producto en la Torre) | Torre (solo lectura en MB51) |
 | **601** | Salida por entrega: el despacho que confirma packing en la Torre | Torre (solo lectura en MB51) |
-| **701 / 702** | Diferencia de inventario (+/−): ajustes manuales de la Torre | Torre (solo lectura en MB51) |
+| **701 / 702** | Diferencia de inventario (+/−): sobrante o faltante al contar | MI07, o ajustes manuales de la Torre |
 
 ---
 
@@ -59,6 +59,11 @@ Escribe el código en el campo de comandos (arriba a la izquierda) y presiona **
 | MIGO | Movimiento de mercancías | Entradas 101/501, salidas 551, anulaciones y visualizar documentos |
 | MMBE | Resumen de stocks | Libre, reservado por la Torre, en pedido y valor |
 | MB51 | Lista de documentos de material | Todos los movimientos: los del ERP y los de la Torre |
+| MI01 | Crear documento de inventario | Elegir centro y materiales a contar (o todos los del centro) |
+| MI04 | Ingresar recuento | Anotar lo contado, a ciegas (no muestra el stock del sistema) |
+| MI03 | Visualizar documento de inventario | Contado vs sistema, diferencias y su valor |
+| MI20 | Lista de diferencias | Todas las diferencias pendientes de contabilizar, con su valor |
+| MI07 | Contabilizar diferencias | Ajusta el stock: 701 sobrante, 702 faltante |
 
 ### Reglas de ME22N (las mismas de SAP)
 
@@ -69,6 +74,26 @@ Escribe el código en el campo de comandos (arriba a la izquierda) y presiona **
   - Desmarcar la casilla la restaura.
 - **Posiciones nuevas**: siguen la numeración (30, 40…). No se permiten si el proveedor está bloqueado.
 - **Auditoría**: cada campo cambiado queda en ME23N → *Modificaciones*, con usuario, valor anterior y valor nuevo (en SAP son CDHDR/CDPOS, tabla `erp_cambios` acá).
+
+### Inventario físico paso a paso
+
+1. **MI01**: crea el documento, por ejemplo "Conteo mensual Bodega Central".
+   - Un material no puede estar en dos inventarios abiertos del mismo centro.
+2. **MI04**: sale alguien con la hoja a contar y anota lo que ve.
+   - Es **a ciegas**: la pantalla no muestra cuánto dice el sistema, para que nadie "ajuste" el conteo.
+   - Vacío = no contado; **0** = contado y no hay nada.
+   - Se puede recontar (volver a MI04) mientras no se haya contabilizado.
+3. **MI03 / MI20**: revisa las diferencias y su valor en pesos.
+   - Si una diferencia se ve rara, recuenta antes de contabilizar.
+4. **MI07**: contabiliza (usa **Verificar** primero).
+   - Sobrante → 701 (sube el stock libre). Faltante → 702 (lo baja).
+   - Queda un documento de material que ves en MB51.
+   - Si un sobrante alcanza para pedidos de venta en quiebre, se liberan solos.
+
+**Importante:** cuenta también lo que está apartado para pedidos (reservado por la Torre), porque sigue físicamente en la bodega hasta el packing.
+- Si falta mercadería **ya reservada**, MI07 no contabiliza y te avisa.
+- Primero hay que resolver esos pedidos (o recontar): así la Torre nunca queda con reservas de stock que no existe.
+- Lo ideal es contar cuando no hay movimientos (antes de abrir o después del despacho), porque MI07 compara contra el stock del momento en que contabilizas.
 
 ### Teclas (como en SAP)
 
@@ -248,9 +273,8 @@ Eso es todo: la transacción aparece en el menú, en el campo de comandos y en l
 
 1. **MB52**: el ejemplo de arriba.
 2. **MB1B / clase 311 — Traslado entre centros**: resta en un centro y suma en otro, en un solo documento con dos líneas.
-3. **MI01/MI04/MI07 — Inventario físico**: cuentas lo que hay, y la diferencia se contabiliza como 701/702.
-4. **ME29N — Liberación de pedidos**: un pedido sobre cierto monto queda bloqueado hasta que un admin lo libere (`operator.is_admin`).
-5. **MIRO — Verificación de facturas**: el siguiente módulo natural (FI). Registra la factura del proveedor contra el pedido y lo recibido (el "3-way match").
+3. **ME29N — Liberación de pedidos**: un pedido sobre cierto monto queda bloqueado hasta que un admin lo libere (`operator.is_admin`).
+4. **MIRO — Verificación de facturas**: el siguiente módulo natural (FI). Registra la factura del proveedor contra el pedido y lo recibido (el "3-way match").
 
 ---
 
@@ -267,6 +291,7 @@ src/erp/
     pedido.js             ME21N ME22N ME23N ME2N
     migo.js               MIGO (101/102/501/502/551/552)
     stock.js              MMBE MB51
+    inventario.js         MI01 MI04 MI03 MI20 MI07
   ui/
     page.js               HTML y estilos de /erp
     cliente.js            "SAP GUI": campo de comandos, teclas, F4, barra de estado, objeto ui

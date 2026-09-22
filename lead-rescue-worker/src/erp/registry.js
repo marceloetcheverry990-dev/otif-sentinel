@@ -11,8 +11,9 @@ import proveedor from './transacciones/proveedor.js';
 import pedido from './transacciones/pedido.js';
 import migo from './transacciones/migo.js';
 import stock from './transacciones/stock.js';
+import inventario from './transacciones/inventario.js';
 
-const MODULOS = [material, proveedor, pedido, migo, stock];
+const MODULOS = [material, proveedor, pedido, migo, stock, inventario];
 
 export const TRANSACCIONES = Object.freeze(
   Object.fromEntries(MODULOS.flat().map((tx) => [tx.code, tx]))
@@ -73,6 +74,16 @@ export const AYUDAS_F4 = {
        FROM depots
        WHERE tenant_id = $1 AND activo = TRUE AND ($2 = '' OR depot_id ILIKE $3 OR nombre ILIKE $3)
        ORDER BY is_default DESC, nombre LIMIT 50`,
+      [tenant_id, q, `%${q}%`]
+    );
+    return r.rows;
+  },
+  async inventario(client, tenant_id, q) {
+    const r = await client.query(
+      `SELECT iblnr AS valor, centro || ' · ' || estado || ' · ' || fecha_planificada::text || COALESCE(' · ' || texto, '') AS texto
+       FROM erp_inventario_fisico
+       WHERE tenant_id = $1 AND ($2 = '' OR iblnr ILIKE $3 OR texto ILIKE $3)
+       ORDER BY (estado = 'CONTABILIZADO'), iblnr DESC LIMIT 50`,
       [tenant_id, q, `%${q}%`]
     );
     return r.rows;

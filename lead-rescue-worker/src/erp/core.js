@@ -24,6 +24,7 @@ export const RANGOS = Object.freeze({
   PROVEEDOR: { objeto: 'PROVEEDOR', inicio: 100000 },
   PEDIDO: { objeto: 'PEDIDO_COMPRA', inicio: 4500000000 },
   DOC_MATERIAL: { objeto: 'DOC_MATERIAL', inicio: 5000000000 },
+  INVENTARIO: { objeto: 'INVENTARIO_FISICO', inicio: 100000000 },
 });
 
 /** Siguiente número del rango. Bloquea la fila del numerador hasta el COMMIT. */

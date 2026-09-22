@@ -27,8 +27,8 @@ export const CLASES_MOVIMIENTO = Object.freeze({
   // Movimientos que nacen en la Torre (solo lectura, ver MB51):
   561: { texto: 'Entrada inicial de stock (alta en Torre)', signo: +1 },
   601: { texto: 'Salida de mercancías por entrega (despacho Torre)', signo: -1 },
-  701: { texto: 'Diferencia de inventario (+) ajuste Torre', signo: +1 },
-  702: { texto: 'Diferencia de inventario (−) ajuste Torre', signo: -1 },
+  701: { texto: 'Diferencia de inventario (+) (MI07 o ajuste Torre)', signo: +1 },
+  702: { texto: 'Diferencia de inventario (−) (MI07 o ajuste Torre)', signo: -1 },
 });
 
 const MENU = ['Logística', 'Gestión de materiales', 'Gestión de stocks'];
@@ -241,7 +241,7 @@ async function anular(client, tenant_id, body, cab) {
 
 // Clases que suben stock libre: tras contabilizarlas se reintenta reservar los
 // pedidos de venta de la Torre que estaban en QUIEBRE esperando esos materiales.
-const CLASES_ENTRADA = ['101', '501', '552'];
+const CLASES_ENTRADA = ['101', '501', '552', '701'];
 
 async function liberarQuiebres(client, env, tenant_id, mblnr) {
   if (!(await isWmsEnabledForTenant(client, env, tenant_id))) return [];
@@ -448,5 +448,8 @@ export const MIGO = {
     if (params.pedido || params.documento) cargar();
   }`,
 };
+
+// Reutilizadas por otras transacciones que mueven stock (ej. MI07 inventario físico).
+export { Verificado, moverStock, crearCabecera, insertarPosicion, liberarQuiebres };
 
 export default [MIGO];

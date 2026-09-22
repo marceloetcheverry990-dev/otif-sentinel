@@ -68,7 +68,7 @@ describe('core: validaciones', () => {
 describe('registro de transacciones', () => {
   it('no tiene errores y trae el set MM v1', () => {
     expect(validarRegistro()).toEqual([]);
-    for (const code of ['MM01', 'MM02', 'MM03', 'MM60', 'XK01', 'XK02', 'XK03', 'MKVZ', 'ME21N', 'ME22N', 'ME23N', 'ME2N', 'MIGO', 'MMBE', 'MB51']) {
+    for (const code of ['MM01', 'MM02', 'MM03', 'MM60', 'XK01', 'XK02', 'XK03', 'MKVZ', 'ME21N', 'ME22N', 'ME23N', 'ME2N', 'MIGO', 'MMBE', 'MB51', 'MI01', 'MI03', 'MI04', 'MI20', 'MI07']) {
       expect(TRANSACCIONES[code], code).toBeTruthy();
     }
   });
@@ -158,7 +158,7 @@ describe('MIGO', () => {
     expect(r.mensaje).toMatch(/1 pedido\(s\) de venta liberado\(s\) de quiebre: OT-QUIEBRE-1/);
     expect(r.invalidarTorre).toBe(true);
     const agg = c.consultas.find((x) => /array_agg/.test(x.sql));
-    expect(agg.params[2]).toEqual(['101', '501', '552']);
+    expect(agg.params[2]).toEqual(['101', '501', '552', '701']);
   });
 
   it('101 con WMS apagado no toca los quiebres', async () => {
@@ -418,5 +418,102 @@ describe('ME22N', () => {
       client: c, tenant_id: 'empresa_base', operator: OPERADOR,
       body: { clase_movimiento: '101', pedido: '4500000000', posiciones: [{ ok: true, ebelp: 10, cantidad: 1 }] },
     })).rejects.toThrow(/borrada/);
+  });
+});
+
+describe('Inventario físico (MI01 / MI04 / MI07)', () => {
+  const tx = (code, body, extra = {}) => ({ client: extra.client, tenant_id: 'empresa_base', operator: OPERADOR, body, params: body, ...extra });
+
+  // posiciones: [{ zeile, sku, contado, libre, reservado }]
+  function clienteInv({ estado = 'CREADO', posiciones }) {
+    const porSku = Object.fromEntries(posiciones.map((p) => [p.sku, p]));
+    return crearCliente([
+      [/erp_numeradores/, () => [{ ultimo: '5000000009' }]],
+      [/FROM erp_inventario_fisico f/, () => [{ iblnr: '100000000', centro: 'c1', estado, mblnr: null }]],
+      [/FROM erp_inventario_fisico_pos x/, () => posiciones.map((p) => ({
+        zeile: p.zeile, sku: p.sku, texto_breve: p.sku, unidad: 'UN', precio_estandar: '100',
+        cantidad_contada: p.contado == null ? null : String(p.contado), libre: String(p.libre), reservado: String(p.reservado || 0),
+      }))],
+      [/SELECT qty_disponible, qty_reservada FROM inventario_bodega/, (prm) => [{ qty_disponible: String(porSku[prm[2]].libre), qty_reservada: String(porSku[prm[2]].reservado || 0) }]],
+      [/SELECT qty_disponible FROM inventario_bodega/, (prm) => [{ qty_disponible: String(porSku[prm[2]].libre) }]],
+    ]);
+  }
+
+  it('MI01 no deja un material en dos inventarios abiertos del mismo centro', async () => {
+    const c = crearCliente([
+      [/FROM depots/, () => [{ depot_id: 'c1' }]],
+      [/SELECT 1 FROM inventario_bodega/, () => [{ '?column?': 1 }]],
+      [/JOIN erp_inventario_fisico f/, () => [{ sku: 'A', iblnr: '100000003' }]],
+    ]);
+    await expect(TRANSACCIONES.MI01.post(tx('MI01', { centro: 'c1', materiales: [{ material: 'A' }] }, { client: c })))
+      .rejects.toThrow(/ya está en el documento de inventario abierto 100000003/);
+  });
+
+  it('MI01 crea el documento con posiciones 1..n (sin repetir materiales)', async () => {
+    const c = crearCliente([
+      [/FROM depots/, () => [{ depot_id: 'c1' }]],
+      [/SELECT 1 FROM inventario_bodega/, () => [{ x: 1 }]],
+      [/erp_numeradores/, () => [{ ultimo: '100000000' }]],
+    ]);
+    const r = await TRANSACCIONES.MI01.post(tx('MI01', { centro: 'c1', materiales: [{ material: 'A' }, { material: 'B' }, { material: 'A' }] }, { client: c }));
+    expect(r.documento).toBe('100000000');
+    const pos = c.consultas.filter((q) => /INSERT INTO erp_inventario_fisico_pos/.test(q.sql)).map((q) => q.params.slice(2));
+    expect(pos).toEqual([[1, 'A'], [2, 'B']]);
+  });
+
+  it('MI04 es a ciegas: no devuelve el stock del sistema', async () => {
+    const c = clienteInv({ posiciones: [{ zeile: 1, sku: 'A', contado: null, libre: 7 }] });
+    const d = await TRANSACCIONES.MI04.get(tx('MI04', { documento: '100000000' }, { client: c }));
+    expect(JSON.stringify(d)).not.toMatch(/libro|libre|diferencia|reservado/);
+  });
+
+  it('MI04 acepta conteo cero, ignora vacíos y marca CONTADO al completar', async () => {
+    const c = clienteInv({ posiciones: [{ zeile: 1, sku: 'A', contado: null, libre: 7 }, { zeile: 2, sku: 'B', contado: 3, libre: 3 }] });
+    const r = await TRANSACCIONES.MI04.post(tx('MI04', { documento: '100000000', conteos: [{ zeile: 1, cantidad: '0' }, { zeile: 2, cantidad: '' }] }, { client: c }));
+    expect(r.mensaje).toMatch(/1 posición\(es\).*conteo completo/);
+    const upd = c.consultas.find((q) => /UPDATE erp_inventario_fisico_pos/.test(q.sql));
+    expect(upd.params.slice(2, 4)).toEqual([1, 0]);
+    expect(upd.params[5]).toBe(7); // snapshot del libro al contar
+    expect(c.consultas.find((q) => /UPDATE erp_inventario_fisico SET estado/.test(q.sql)).params[2]).toBe('CONTADO');
+  });
+
+  it('MI07 exige que todo esté contado', async () => {
+    const c = clienteInv({ posiciones: [{ zeile: 1, sku: 'A', contado: 5, libre: 5 }, { zeile: 2, sku: 'B', contado: null, libre: 1 }] });
+    await expect(TRANSACCIONES.MI07.post(tx('MI07', { documento: '100000000' }, { client: c }))).rejects.toThrow(/Faltan recuentos en las posiciones 2/);
+  });
+
+  it('MI07 contabiliza sobrante 701 y faltante 702 contra libre + reservado', async () => {
+    const c = clienteInv({ posiciones: [
+      { zeile: 1, sku: 'A', contado: 12, libre: 8, reservado: 2 },  // libro 10 → +2
+      { zeile: 2, sku: 'B', contado: 4, libre: 5, reservado: 0 },   // libro 5 → −1
+      { zeile: 3, sku: 'C', contado: 6, libre: 6, reservado: 0 },   // sin diferencia
+    ] });
+    const r = await TRANSACCIONES.MI07.post(tx('MI07', { documento: '100000000' }, { client: c, env: {} }));
+    expect(r.mblnr).toBe('5000000009');
+    expect(r.mensaje).toMatch(/1 sobrante\(s\) \(701\), 1 faltante\(s\) \(702\), valor neto 100 CLP/);
+    const movs = c.consultas.filter((q) => /INSERT INTO movimientos_inventario/.test(q.sql)).map((q) => [q.params[2], q.params[3], q.params[4], q.params[6]]);
+    expect(movs).toEqual([['A', 'entrada', 2, '701'], ['B', 'salida', 1, '702']]);
+    const difs = c.consultas.filter((q) => /SET qty_libro = \$4, diferencia = \$5/.test(q.sql)).map((q) => q.params.slice(3));
+    expect(difs).toEqual([[10, 2], [5, -1], [6, 0]]);
+  });
+
+  it('MI07 no contabiliza un faltante que se come stock reservado por la Torre', async () => {
+    const c = clienteInv({ posiciones: [{ zeile: 1, sku: 'A', contado: 1, libre: 2, reservado: 5 }] }); // libro 7 → −6, libre 2
+    await expect(TRANSACCIONES.MI07.post(tx('MI07', { documento: '100000000' }, { client: c, env: {} })))
+      .rejects.toThrow(/solo hay 2 libres; 5 están reservados por la Torre/);
+  });
+
+  it('MI07 sin diferencias no crea documento de material', async () => {
+    const c = clienteInv({ posiciones: [{ zeile: 1, sku: 'A', contado: 3, libre: 3 }] });
+    const r = await TRANSACCIONES.MI07.post(tx('MI07', { documento: '100000000' }, { client: c, env: {} }));
+    expect(r.mblnr).toBeNull();
+    expect(r.mensaje).toMatch(/sin diferencias/);
+    expect(c.consultas.some((q) => /erp_documentos_material/.test(q.sql))).toBe(false);
+  });
+
+  it('no se puede contar ni contabilizar un documento ya contabilizado', async () => {
+    const c = clienteInv({ estado: 'CONTABILIZADO', posiciones: [{ zeile: 1, sku: 'A', contado: 3, libre: 3 }] });
+    await expect(TRANSACCIONES.MI04.post(tx('MI04', { documento: '100000000', conteos: [{ zeile: 1, cantidad: 1 }] }, { client: c }))).rejects.toThrow(/ya está contabilizado/);
+    await expect(TRANSACCIONES.MI07.post(tx('MI07', { documento: '100000000' }, { client: c }))).rejects.toThrow(/ya está contabilizado/);
   });
 });
