@@ -106,6 +106,28 @@ export async function ensureErpSchema(client) {
     )
   `);
 
+  // Indicador de borrado de posición (LOEKZ en SAP): la posición no se elimina.
+  await client.query(`
+    ALTER TABLE erp_pedidos_compra_pos
+      ADD COLUMN IF NOT EXISTS borrado BOOLEAN NOT NULL DEFAULT FALSE
+  `).catch((e) => console.warn('[ERP_SCHEMA] pedidos_pos', e.message));
+
+  // Documentos de modificación (CDHDR/CDPOS en SAP): quién cambió qué y cuándo.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS erp_cambios (
+      id             BIGSERIAL    PRIMARY KEY,
+      tenant_id      VARCHAR(64)  NOT NULL,
+      objeto         VARCHAR(24)  NOT NULL,
+      clave          VARCHAR(20)  NOT NULL,
+      posicion       INTEGER,
+      campo          VARCHAR(40)  NOT NULL,
+      valor_antes    TEXT,
+      valor_despues  TEXT,
+      usuario        VARCHAR(64),
+      created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    )
+  `);
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS erp_documentos_material (
       tenant_id              VARCHAR(64)  NOT NULL,

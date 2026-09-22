@@ -130,6 +130,7 @@ async function entradaPorPedido(client, tenant_id, body, cab) {
     const pos = porEbelp.get(ebelp);
     if (!pos) throw fallo(`La posición ${l.ebelp} no existe en el pedido ${pedido.cabecera.ebeln}`);
     if (vistos.has(ebelp)) throw fallo(`La posición ${ebelp} está repetida`);
+    if (pos.borrado) throw fallo(`La posición ${ebelp} está borrada: no admite entradas`);
     vistos.add(ebelp);
     const q = cantidad(l.cantidad, { campo: `Cantidad pos. ${ebelp}` });
     const pendiente = Number(pos.cantidad) - Number(pos.cantidad_recibida);

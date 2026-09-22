@@ -68,7 +68,7 @@ describe('core: validaciones', () => {
 describe('registro de transacciones', () => {
   it('no tiene errores y trae el set MM v1', () => {
     expect(validarRegistro()).toEqual([]);
-    for (const code of ['MM01', 'MM02', 'MM03', 'MM60', 'XK01', 'XK02', 'XK03', 'MKVZ', 'ME21N', 'ME23N', 'ME2N', 'MIGO', 'MMBE', 'MB51']) {
+    for (const code of ['MM01', 'MM02', 'MM03', 'MM60', 'XK01', 'XK02', 'XK03', 'MKVZ', 'ME21N', 'ME22N', 'ME23N', 'ME2N', 'MIGO', 'MMBE', 'MB51']) {
       expect(TRANSACCIONES[code], code).toBeTruthy();
     }
   });
@@ -341,5 +341,82 @@ describe('router /api/erp', () => {
   it('exige tenant en la sesión', async () => {
     const res = await handleErpApi(req('GET', '/api/erp/tx/MM60'), {}, { username: 'x' });
     expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+});
+
+describe('ME22N', () => {
+  function clienteME22N({ recibido = 0, borrado = false, bloqueado = false } = {}) {
+    const pos = { ebelp: 10, sku: 'SKU-1', texto_breve: 'Caja', cantidad: '10.000', cantidad_recibida: String(recibido),
+      unidad: 'UN', precio_neto: '1000.00', centro: 'c1', fecha_entrega: null, borrado };
+    return crearCliente([
+      [/FROM erp_pedidos_compra pc/, () => [{ ebeln: '4500000000', proveedor_id: '100000', estado: 'ABIERTO', texto: null }]],
+      [/FROM erp_pedidos_compra_pos\s+WHERE/, () => [pos]],
+      [/FROM erp_proveedores/, () => [{ proveedor_id: '100000', bloqueado }]],
+      [/FROM productos WHERE/, (p) => [{ sku: p[1], nombre: 'Nuevo', unidad: 'UN', activo: true, precio_estandar: '200' }]],
+      [/FROM depots/, () => [{ depot_id: 'c1', nombre: 'Central' }]],
+    ]);
+  }
+  const post = (client, body) => TRANSACCIONES.ME22N.post({ client, tenant_id: 'empresa_base', operator: OPERADOR, body: { pedido: '4500000000', ...body } });
+  const cambios = (c) => c.consultas.filter((q) => /INSERT INTO erp_cambios/.test(q.sql)).map((q) => q.params.slice(3, 7));
+
+  it('cambia cantidad y precio y deja documento de modificación', async () => {
+    const c = clienteME22N();
+    const r = await post(c, { posiciones: [{ ebelp: '10', cantidad: '12', precio_neto: '950', fecha_entrega: '' }] });
+    expect(r.mensaje).toMatch(/modificado \(2 cambio\(s\)\)/);
+    expect(cambios(c)).toEqual([[10, 'Cantidad', '10', '12'], [10, 'Precio neto', '1000', '950']]);
+    expect(c.consultas.some((q) => /UPDATE erp_pedidos_compra SET estado/.test(q.sql))).toBe(true);
+  });
+
+  it('sin cambios responde advertencia y no escribe', async () => {
+    const c = clienteME22N();
+    const r = await post(c, { posiciones: [{ ebelp: 10, cantidad: '10', precio_neto: '1000', fecha_entrega: '' }] });
+    expect(r).toMatchObject({ tipo: 'W', mensaje: 'No se han modificado datos' });
+    expect(c.consultas.some((q) => /^\s*(UPDATE|INSERT)/.test(q.sql))).toBe(false);
+  });
+
+  it('no deja la cantidad bajo lo recibido ni cambia precio con entradas', async () => {
+    await expect(post(clienteME22N({ recibido: 6 }), { posiciones: [{ ebelp: 10, cantidad: 5 }] })).rejects.toThrow(/menor que lo ya recibido \(6\)/);
+    await expect(post(clienteME22N({ recibido: 6 }), { posiciones: [{ ebelp: 10, precio_neto: 900 }] })).rejects.toThrow(/precio ya no se puede/);
+  });
+
+  it('borrar solo sin entradas; restaurar quita el indicador', async () => {
+    await expect(post(clienteME22N({ recibido: 1 }), { posiciones: [{ ebelp: 10, borrar: true }] })).rejects.toThrow(/anúlelas en MIGO/);
+    const c = clienteME22N();
+    await post(c, { posiciones: [{ ebelp: 10, borrar: true, cantidad: '99' }] });
+    expect(cambios(c)).toEqual([[10, 'Indicador de borrado', 'no', 'sí']]); // la cantidad de una borrada se ignora
+    const c2 = clienteME22N({ borrado: true });
+    await post(c2, { posiciones: [{ ebelp: 10, borrar: false }] });
+    expect(cambios(c2)).toEqual([[10, 'Indicador de borrado', 'sí', 'no']]);
+  });
+
+  it('añade posiciones nuevas siguiendo la numeración', async () => {
+    const c = clienteME22N();
+    await post(c, { nuevas: [{ material: 'SKU-9', cantidad: '3', centro: 'c1' }, { material: '' }] });
+    const ins = c.consultas.find((q) => /INSERT INTO erp_pedidos_compra_pos/.test(q.sql));
+    expect(ins.params.slice(2, 4)).toEqual([20, 'SKU-9']);
+    expect(ins.params[7]).toBe(200);
+    expect(cambios(c)).toEqual([[20, 'Posición creada', '', 'SKU-9 × 3']]);
+  });
+
+  it('no añade posiciones si el proveedor está bloqueado', async () => {
+    await expect(post(clienteME22N({ bloqueado: true }), { nuevas: [{ material: 'SKU-9', cantidad: 1, centro: 'c1' }] }))
+      .rejects.toThrow(/bloqueado/);
+  });
+
+  it('estadoPedido ignora posiciones borradas', () => {
+    expect(estadoPedido([{ cantidad: 5, cantidad_recibida: 5 }, { cantidad: 5, cantidad_recibida: 0, borrado: true }])).toBe('CERRADO');
+    expect(estadoPedido([{ cantidad: 5, cantidad_recibida: 0, borrado: true }])).toBe('CERRADO');
+  });
+
+  it('MIGO rechaza entradas a una posición borrada', async () => {
+    const c = crearCliente([
+      [/erp_numeradores/, () => [{ ultimo: '5000000000' }]],
+      [/FROM erp_pedidos_compra pc/, () => [{ ebeln: '4500000000' }]],
+      [/FROM erp_pedidos_compra_pos\s+WHERE/, () => [{ ebelp: 10, sku: 'S', cantidad: '5', cantidad_recibida: '0', borrado: true, centro: 'c1' }]],
+    ]);
+    await expect(TRANSACCIONES.MIGO.post({
+      client: c, tenant_id: 'empresa_base', operator: OPERADOR,
+      body: { clase_movimiento: '101', pedido: '4500000000', posiciones: [{ ok: true, ebelp: 10, cantidad: 1 }] },
+    })).rejects.toThrow(/borrada/);
   });
 });

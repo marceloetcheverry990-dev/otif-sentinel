@@ -136,9 +136,24 @@ export async function leerProveedor(client, tenant_id, proveedor_id) {
   return r.rows[0];
 }
 
-/** Estado de un pedido según lo recibido en sus posiciones. */
-export function estadoPedido(posiciones) {
-  if (!posiciones.length) return 'ABIERTO';
+/** Deja rastro de un cambio de campo (ver ME23N → Modificaciones). No registra si no cambió. */
+export async function registrarCambio(client, { tenant_id, objeto, clave, posicion = null, campo, antes, despues, operator }) {
+  const a = antes == null ? '' : String(antes);
+  const d = despues == null ? '' : String(despues);
+  if (a === d) return false;
+  await client.query(
+    `INSERT INTO erp_cambios (tenant_id, objeto, clave, posicion, campo, valor_antes, valor_despues, usuario)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [tenant_id, objeto, clave, posicion, campo, a, d, operadorDe(operator)]
+  );
+  return true;
+}
+
+/** Estado de un pedido según lo recibido en sus posiciones (ignora las borradas). */
+export function estadoPedido(todas) {
+  const posiciones = todas.filter((p) => !p.borrado);
+  if (!todas.length) return 'ABIERTO';
+  if (!posiciones.length) return 'CERRADO';
   const completas = posiciones.every((p) => Number(p.cantidad_recibida) >= Number(p.cantidad));
   if (completas) return 'CERRADO';
   const alguna = posiciones.some((p) => Number(p.cantidad_recibida) > 0);

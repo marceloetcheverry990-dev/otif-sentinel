@@ -53,11 +53,22 @@ Escribe el código en el campo de comandos (arriba a la izquierda) y presiona **
 | XK01 / XK02 / XK03 | Proveedor crear / modificar / visualizar | Maestro de proveedores. El RUT se valida con dígito verificador |
 | MKVZ | Lista de proveedores | Buscar proveedores |
 | ME21N | Crear pedido | Pedido de compra al proveedor |
-| ME23N | Visualizar pedido | Ver el pedido con lo recibido, lo pendiente y el historial de entradas |
+| ME22N | Modificar pedido | Cambiar cantidad, precio o fecha, borrar posiciones o añadir nuevas (con reglas SAP, ver abajo) |
+| ME23N | Visualizar pedido | Ver el pedido con lo recibido, lo pendiente, el historial de entradas y las modificaciones |
 | ME2N | Pedidos por proveedor / material | Lista de posiciones de pedido y lo que falta por llegar |
 | MIGO | Movimiento de mercancías | Entradas 101/501, salidas 551, anulaciones y visualizar documentos |
 | MMBE | Resumen de stocks | Libre, reservado por la Torre, en pedido y valor |
 | MB51 | Lista de documentos de material | Todos los movimientos: los del ERP y los de la Torre |
+
+### Reglas de ME22N (las mismas de SAP)
+
+- **Cantidad**: no puede quedar bajo lo ya recibido.
+- **Precio**: solo se cambia en posiciones sin entradas de mercancía (lo recibido ya se valoró con el precio anterior).
+- **Borrar**: marca el *indicador de borrado*. La posición queda visible pero sin pendiente: no suma "En pedido" en MMBE ni admite MIGO.
+  - Solo se puede borrar si no tiene entradas; si las tiene, anúlalas primero en MIGO.
+  - Desmarcar la casilla la restaura.
+- **Posiciones nuevas**: siguen la numeración (30, 40…). No se permiten si el proveedor está bloqueado.
+- **Auditoría**: cada campo cambiado queda en ME23N → *Modificaciones*, con usuario, valor anterior y valor nuevo (en SAP son CDHDR/CDPOS, tabla `erp_cambios` acá).
 
 ### Teclas (como en SAP)
 
@@ -203,6 +214,7 @@ Eso es todo: la transacción aparece en el menú, en el campo de comandos y en l
 - Para un error "de SAP" usa `throw fallo('mensaje')`. El usuario lo ve en rojo en la barra de estado y **nada se graba**.
 - Para números correlativos usa `siguienteNumero(client, tenant_id, RANGOS.X)`. Agrega tu rango en `RANGOS`.
 - Si mueves stock, **no escribas `inventario_bodega` a mano**: reutiliza la lógica de `migo.js` (`moverStock`) para que la Torre y MB51 lo vean.
+- Para auditar cambios de campos usa `registrarCambio()` de `core.js` (ver ME22N).
 - Si necesitas una tabla nueva:
   - agrégala a `src/erp/schema.js` (respaldo en runtime),
   - y a una migración `migrations/0XX_*.sql` con RLS (copia el bloque `DO $$ ... $$` de la 025).
@@ -235,11 +247,10 @@ Eso es todo: la transacción aparece en el menú, en el campo de comandos y en l
 ## 5. Ejercicios sugeridos (en orden de dificultad)
 
 1. **MB52**: el ejemplo de arriba.
-2. **ME22N — Modificar pedido**: cambiar cantidad o precio de posiciones sin entradas y borrar posiciones. Pista: reutiliza `leerPedido()` y valida `cantidad >= cantidad_recibida`.
-3. **MB1B / clase 311 — Traslado entre centros**: resta en un centro y suma en otro, en un solo documento con dos líneas.
-4. **MI01/MI04/MI07 — Inventario físico**: cuentas lo que hay, y la diferencia se contabiliza como 701/702.
-5. **ME29N — Liberación de pedidos**: un pedido sobre cierto monto queda bloqueado hasta que un admin lo libere (`operator.is_admin`).
-6. **MIRO — Verificación de facturas**: el siguiente módulo natural (FI). Registra la factura del proveedor contra el pedido y lo recibido (el "3-way match").
+2. **MB1B / clase 311 — Traslado entre centros**: resta en un centro y suma en otro, en un solo documento con dos líneas.
+3. **MI01/MI04/MI07 — Inventario físico**: cuentas lo que hay, y la diferencia se contabiliza como 701/702.
+4. **ME29N — Liberación de pedidos**: un pedido sobre cierto monto queda bloqueado hasta que un admin lo libere (`operator.is_admin`).
+5. **MIRO — Verificación de facturas**: el siguiente módulo natural (FI). Registra la factura del proveedor contra el pedido y lo recibido (el "3-way match").
 
 ---
 
@@ -253,7 +264,7 @@ src/erp/
   transacciones/
     material.js           MM01 MM02 MM03 MM60
     proveedor.js          XK01 XK02 XK03 MKVZ
-    pedido.js             ME21N ME23N ME2N
+    pedido.js             ME21N ME22N ME23N ME2N
     migo.js               MIGO (101/102/501/502/551/552)
     stock.js              MMBE MB51
   ui/

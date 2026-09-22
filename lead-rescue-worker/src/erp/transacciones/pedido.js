@@ -1,10 +1,10 @@
 // src/erp/transacciones/pedido.js
-// Pedidos de compra: ME21N crear, ME23N visualizar, ME2N lista por proveedor/material.
+// Pedidos de compra: ME21N crear, ME22N modificar, ME23N visualizar, ME2N lista por proveedor/material.
 // Un pedido NO mueve stock: el stock entra cuando llega la mercancía (MIGO, clase 101).
 
 import {
   fallo, texto, cantidad, importe, fecha,
-  siguienteNumero, RANGOS, validarCentro, leerProveedor, operadorDe,
+  siguienteNumero, RANGOS, validarCentro, leerProveedor, operadorDe, registrarCambio, estadoPedido,
 } from '../core.js';
 
 const MENU = ['Logística', 'Gestión de materiales', 'Compras', 'Pedido'];
@@ -21,9 +21,9 @@ export async function leerPedido(client, tenant_id, ebeln, { paraActualizar = fa
   );
   if (!cab.rowCount) throw fallo(`El pedido ${id} no existe`, 404);
   const pos = await client.query(
-    `SELECT ebelp, sku, texto_breve, cantidad, cantidad_recibida, unidad, precio_neto, centro, fecha_entrega,
-            GREATEST(cantidad - cantidad_recibida, 0) AS pendiente,
-            ROUND(cantidad * precio_neto, 2) AS valor_neto
+    `SELECT ebelp, sku, texto_breve, cantidad, cantidad_recibida, unidad, precio_neto, centro, fecha_entrega, borrado,
+            CASE WHEN borrado THEN 0 ELSE GREATEST(cantidad - cantidad_recibida, 0) END AS pendiente,
+            CASE WHEN borrado THEN 0 ELSE ROUND(cantidad * precio_neto, 2) END AS valor_neto
      FROM erp_pedidos_compra_pos
      WHERE tenant_id = $1 AND ebeln = $2
      ORDER BY ebelp${paraActualizar ? ' FOR UPDATE' : ''}`,
@@ -32,17 +32,17 @@ export async function leerPedido(client, tenant_id, ebeln, { paraActualizar = fa
   return { cabecera: cab.rows[0], posiciones: pos.rows };
 }
 
-async function validarPosiciones(client, tenant_id, rawPosiciones) {
+export async function validarPosiciones(client, tenant_id, rawPosiciones, { primerEbelp = 10, maximo = MAX_POSICIONES } = {}) {
   const filas = (Array.isArray(rawPosiciones) ? rawPosiciones : [])
     .filter((p) => p && String(p.material ?? '').trim() !== '');
   if (!filas.length) throw fallo('Introduzca al menos una posición');
-  if (filas.length > MAX_POSICIONES) throw fallo(`Máximo ${MAX_POSICIONES} posiciones por pedido`);
+  if (filas.length > maximo) throw fallo(`Máximo ${MAX_POSICIONES} posiciones por pedido`);
 
   const centrosOk = new Map();
   const posiciones = [];
   for (let i = 0; i < filas.length; i++) {
     const f = filas[i];
-    const ebelp = (i + 1) * 10;
+    const ebelp = primerEbelp + i * 10;
     const sku = texto(f.material, { campo: `Material pos. ${ebelp}`, max: 64, requerido: true });
     const mat = await client.query(
       `SELECT sku, nombre, unidad, activo, precio_estandar FROM productos WHERE tenant_id = $1 AND sku = $2`,
@@ -216,7 +216,15 @@ export const ME23N = {
        ORDER BY d.mblnr, d.zeile`,
       [tenant_id, pedido.cabecera.ebeln]
     );
-    return { ...pedido, historial: hist.rows };
+    const cambios = await client.query(
+      `SELECT posicion, campo, valor_antes, valor_despues, usuario, created_at
+       FROM erp_cambios
+       WHERE tenant_id = $1 AND objeto = 'PEDIDO' AND clave = $2
+       ORDER BY created_at DESC, id DESC
+       LIMIT 200`,
+      [tenant_id, pedido.cabecera.ebeln]
+    );
+    return { ...pedido, historial: hist.rows, cambios: cambios.rows };
   },
   screen: `function (ui, params) {
     function inicial() {
@@ -254,6 +262,7 @@ export const ME23N = {
           { id: 'valor_neto', etiqueta: 'Valor neto', tipo: 'money' },
           { id: 'centro', etiqueta: 'Centro' },
           { id: 'fecha_entrega', etiqueta: 'Fecha entrega', tipo: 'date' },
+          { id: 'borrado', etiqueta: 'Borrado', tipo: 'check' },
         ], d.posiciones)) +
         ui.grupo('Historial de pedido', d.historial.length ? ui.tabla([
           { id: 'clase_movimiento', etiqueta: 'CMv' },
@@ -264,13 +273,212 @@ export const ME23N = {
           { id: 'unidad', etiqueta: 'UM' },
           { id: 'importe', etiqueta: 'Importe', tipo: 'money' },
           { id: 'anulado_por', etiqueta: 'Anulado por' },
-        ], d.historial) : '<p class="erp-ayuda">Sin entradas de mercancía todavía.</p>')
+        ], d.historial) : '<p class="erp-ayuda">Sin entradas de mercancía todavía.</p>') +
+        ui.grupo('Modificaciones', (d.cambios || []).length ? ui.tabla([
+          { id: 'created_at', etiqueta: 'Fecha', tipo: 'date' },
+          { id: 'usuario', etiqueta: 'Usuario' },
+          { id: 'posicion', etiqueta: 'Pos.' },
+          { id: 'campo', etiqueta: 'Campo' },
+          { id: 'valor_antes', etiqueta: 'Valor anterior' },
+          { id: 'valor_despues', etiqueta: 'Valor nuevo' },
+        ], d.cambios) : '<p class="erp-ayuda">El pedido no ha sido modificado.</p>')
       );
-      var botones = [{ texto: 'Otro pedido', tecla: 'F3', accion: inicial }];
+      var botones = [
+        { texto: 'Modificar (ME22N)', accion: function () { ui.ir('ME22N', { pedido: c.ebeln }); } },
+        { texto: 'Otro pedido', tecla: 'F3', accion: inicial },
+      ];
       if (c.estado !== 'CERRADO') botones.unshift({ texto: 'Entrada de mercancías (MIGO)', primario: true, accion: function () { ui.ir('MIGO', { pedido: c.ebeln }); } });
       ui.botones(botones);
     }
     if (params.pedido) ui.get('ME23N', { pedido: params.pedido }).then(mostrar, inicial);
+    else inicial();
+  }`,
+};
+
+const siNo = (b) => (b ? 'sí' : 'no');
+const numTxt = (n) => String(Number(n));
+
+export const ME22N = {
+  code: 'ME22N',
+  titulo: 'Modificar pedido',
+  menu: MENU,
+  // Reglas (las mismas de SAP):
+  //  - la cantidad no puede quedar bajo lo ya recibido;
+  //  - el precio solo cambia en posiciones sin entradas de mercancía;
+  //  - borrar = indicador de borrado (la posición queda, sin pendiente), solo sin entradas;
+  //    se puede quitar el indicador para restaurarla;
+  //  - cada campo modificado queda en erp_cambios (ME23N → Modificaciones).
+  async post({ client, tenant_id, body, operator }) {
+    const pedido = await leerPedido(client, tenant_id, body.pedido, { paraActualizar: true });
+    const ebeln = pedido.cabecera.ebeln;
+    let cambios = 0;
+    const cambio = async (posicion, campo, antes, despues) => {
+      if (await registrarCambio(client, { tenant_id, objeto: 'PEDIDO', clave: ebeln, posicion, campo, antes, despues, operator })) {
+        cambios += 1;
+      }
+    };
+
+    if (body.texto !== undefined) {
+      const nuevo = texto(body.texto, { campo: 'Texto cabecera', max: 1000 });
+      if ((nuevo || '') !== (pedido.cabecera.texto || '')) {
+        await client.query(`UPDATE erp_pedidos_compra SET texto = $3 WHERE tenant_id = $1 AND ebeln = $2`, [tenant_id, ebeln, nuevo]);
+        await cambio(null, 'Texto cabecera', pedido.cabecera.texto, nuevo);
+      }
+    }
+
+    const porEbelp = new Map(pedido.posiciones.map((p) => [Number(p.ebelp), p]));
+    const vistos = new Set();
+    for (const m of Array.isArray(body.posiciones) ? body.posiciones : []) {
+      const ebelp = Number(m?.ebelp);
+      const pos = porEbelp.get(ebelp);
+      if (!pos) throw fallo(`La posición ${m?.ebelp} no existe en el pedido ${ebeln}`);
+      if (vistos.has(ebelp)) throw fallo(`La posición ${ebelp} está repetida`);
+      vistos.add(ebelp);
+      const recibido = Number(pos.cantidad_recibida);
+      const set = (col, valor) => client.query(
+        `UPDATE erp_pedidos_compra_pos SET ${col} = $4 WHERE tenant_id = $1 AND ebeln = $2 AND ebelp = $3`,
+        [tenant_id, ebeln, ebelp, valor]
+      );
+
+      if (m.borrar !== undefined && m.borrar !== '') {
+        const borrar = m.borrar === true || m.borrar === 'true';
+        if (borrar !== Boolean(pos.borrado)) {
+          if (borrar && recibido > 0) {
+            throw fallo(`Pos. ${ebelp}: tiene entradas de mercancía (${recibido}); anúlelas en MIGO antes de borrarla`);
+          }
+          await set('borrado', borrar);
+          await cambio(ebelp, 'Indicador de borrado', siNo(pos.borrado), siNo(borrar));
+          pos.borrado = borrar;
+        }
+      }
+      if (pos.borrado) continue; // una posición borrada no se modifica
+
+      if (m.cantidad !== undefined && m.cantidad !== '') {
+        const q = cantidad(m.cantidad, { campo: `Cantidad pos. ${ebelp}` });
+        if (q !== Number(pos.cantidad)) {
+          if (q < recibido) throw fallo(`Pos. ${ebelp}: la cantidad no puede ser menor que lo ya recibido (${recibido})`);
+          await set('cantidad', q);
+          await cambio(ebelp, 'Cantidad', numTxt(pos.cantidad), numTxt(q));
+          pos.cantidad = q;
+        }
+      }
+      if (m.precio_neto !== undefined && m.precio_neto !== '') {
+        const p = importe(m.precio_neto, { campo: `Precio neto pos. ${ebelp}` });
+        if (p !== Number(pos.precio_neto)) {
+          if (recibido > 0) throw fallo(`Pos. ${ebelp}: tiene entradas de mercancía; el precio ya no se puede modificar`);
+          await set('precio_neto', p);
+          await cambio(ebelp, 'Precio neto', numTxt(pos.precio_neto), numTxt(p));
+        }
+      }
+      if (m.fecha_entrega !== undefined) {
+        const f = fecha(m.fecha_entrega, { campo: `Fecha entrega pos. ${ebelp}` });
+        const actual = pos.fecha_entrega ? new Date(pos.fecha_entrega).toISOString().slice(0, 10) : null;
+        if ((f || null) !== actual) {
+          await set('fecha_entrega', f);
+          await cambio(ebelp, 'Fecha de entrega', actual, f);
+        }
+      }
+    }
+
+    const nuevas = (Array.isArray(body.nuevas) ? body.nuevas : []).filter((p) => p && String(p.material ?? '').trim() !== '');
+    if (nuevas.length) {
+      const prov = await leerProveedor(client, tenant_id, pedido.cabecera.proveedor_id);
+      if (prov.bloqueado) throw fallo(`El proveedor ${prov.proveedor_id} está bloqueado: no se pueden añadir posiciones`);
+      const maxEbelp = pedido.posiciones.reduce((m, p) => Math.max(m, Number(p.ebelp)), 0);
+      const validadas = await validarPosiciones(client, tenant_id, nuevas, {
+        primerEbelp: maxEbelp + 10,
+        maximo: MAX_POSICIONES - pedido.posiciones.length,
+      });
+      for (const p of validadas) {
+        await client.query(
+          `INSERT INTO erp_pedidos_compra_pos (tenant_id, ebeln, ebelp, sku, texto_breve, cantidad, unidad,
+                                               precio_neto, centro, fecha_entrega)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [tenant_id, ebeln, p.ebelp, p.sku, p.texto_breve, p.cantidad, p.unidad, p.precio_neto, p.centro, p.fecha_entrega]
+        );
+        await cambio(p.ebelp, 'Posición creada', '', `${p.sku} × ${p.cantidad}`);
+      }
+    }
+
+    if (!cambios) return { tipo: 'W', mensaje: 'No se han modificado datos', pedido: ebeln };
+
+    const actualizado = await leerPedido(client, tenant_id, ebeln);
+    await client.query(
+      `UPDATE erp_pedidos_compra SET estado = $3 WHERE tenant_id = $1 AND ebeln = $2`,
+      [tenant_id, ebeln, estadoPedido(actualizado.posiciones)]
+    );
+    return { mensaje: `Pedido estándar ${ebeln} modificado (${cambios} cambio(s))`, pedido: ebeln };
+  },
+  screen: `function (ui, params) {
+    function inicial() {
+      ui.titulo(null);
+      ui.pantalla(ui.grupo('Pedido', ui.campo({ id: 'pedido', etiqueta: 'Pedido', obligatorio: true, f4: 'pedido', valor: params.pedido || '' })));
+      ui.botones([{ texto: 'Continuar', tecla: 'Enter', accion: async function () {
+        var v = ui.valores();
+        if (!v.pedido) return ui.mensaje('E', 'Rellene todos los campos obligatorios');
+        editar(await ui.get('ME23N', { pedido: v.pedido }));
+      } }]);
+      ui.foco('pedido');
+    }
+
+    function editar(d) {
+      var c = d.cabecera;
+      var n = d.posiciones.length;
+      ui.titulo('Modificar pedido estándar ' + c.ebeln + ' — ' + (c.nombre_proveedor || c.proveedor_id));
+      var filas = d.posiciones.map(function (p, i) {
+        var recibido = Number(p.cantidad_recibida);
+        var bloq = !!p.borrado;
+        return '<tr' + (bloq ? ' class="erp-fila-inactiva"' : '') + '>' +
+          '<td class="erp-num">' + p.ebelp + '<input type="hidden" data-fila="' + i + '" data-col="ebelp" value="' + p.ebelp + '"></td>' +
+          '<td>' + ui.esc(p.sku) + '</td><td class="erp-texto-breve">' + ui.esc(p.texto_breve || '') + '</td>' +
+          '<td>' + ui.celda({ fila: i, col: 'cantidad', tipo: 'number', valor: Number(p.cantidad), ancho: 8, soloLectura: bloq }) + '</td>' +
+          '<td class="erp-num">' + ui.num(recibido) + '</td>' +
+          '<td>' + ui.celda({ fila: i, col: 'precio_neto', tipo: 'number', valor: Number(p.precio_neto), ancho: 10, soloLectura: bloq || recibido > 0 }) + '</td>' +
+          '<td>' + ui.esc(p.centro) + '</td>' +
+          '<td>' + ui.celda({ fila: i, col: 'fecha_entrega', tipo: 'date', valor: p.fecha_entrega ? String(p.fecha_entrega).slice(0, 10) : '', soloLectura: bloq }) + '</td>' +
+          '<td>' + ui.celda({ fila: i, col: 'borrar', tipo: 'check', valor: bloq, soloLectura: recibido > 0 }) + '</td>' +
+        '</tr>';
+      }).join('');
+      var nuevas = '';
+      for (var j = 0; j < 3; j++) {
+        var k = n + j;
+        nuevas += '<tr><td class="erp-num">nueva</td>' +
+          '<td colspan="2">' + ui.celda({ fila: k, col: 'material', f4: 'material', ancho: 14 }) + '</td>' +
+          '<td>' + ui.celda({ fila: k, col: 'cantidad', tipo: 'number', ancho: 8 }) + '</td><td></td>' +
+          '<td>' + ui.celda({ fila: k, col: 'precio_neto', tipo: 'number', ancho: 10 }) + '</td>' +
+          '<td>' + ui.celda({ fila: k, col: 'centro', f4: 'centro', valor: ui.centroPorDefecto(), ancho: 16 }) + '</td>' +
+          '<td>' + ui.celda({ fila: k, col: 'fecha_entrega', tipo: 'date' }) + '</td><td></td></tr>';
+      }
+      ui.pantalla(
+        ui.grupo('Cabecera',
+          ui.campo({ id: 'proveedor', etiqueta: 'Proveedor', valor: c.proveedor_id + ' ' + (c.nombre_proveedor || ''), soloLectura: true, ancho: 40 }) +
+          ui.campo({ id: 'estado', etiqueta: 'Estado', valor: c.estado, soloLectura: true }) +
+          ui.campo({ id: 'texto', etiqueta: 'Texto cabecera', valor: c.texto || '', ancho: 50 })
+        ) +
+        ui.grupo('Posiciones',
+          '<table class="erp-tabla erp-tabla-editable"><thead><tr><th>Pos.</th><th>Material</th><th>Texto breve</th><th>Cantidad</th><th>Recibido</th><th>Precio neto</th><th>Centro</th><th>Fecha entrega</th><th>Borrar</th></tr></thead><tbody>' +
+          filas + nuevas + '</tbody></table>' +
+          '<p class="erp-ayuda">La cantidad no puede quedar bajo lo recibido. Precio y borrado solo en posiciones sin entradas de mercancía. Para añadir posiciones use las filas "nueva".</p>')
+      );
+      ui.botones([
+        { texto: 'Grabar', tecla: 'Ctrl+S', primario: true, accion: async function () {
+          var todas = ui.filas();
+          var body = {
+            pedido: c.ebeln,
+            texto: ui.valores().texto,
+            posiciones: todas.filter(function (f) { return f.ebelp; }),
+            nuevas: todas.filter(function (f) { return f.material; }),
+          };
+          var r = await ui.post('ME22N', body);
+          if (r.tipo === 'W') return ui.mensaje('W', r.mensaje);
+          ui.ir('ME23N', { pedido: c.ebeln }, { mensaje: ['S', r.mensaje] });
+        } },
+        { texto: 'Visualizar (ME23N)', accion: function () { ui.ir('ME23N', { pedido: c.ebeln }); } },
+        { texto: 'Otro pedido', tecla: 'F3', accion: inicial },
+      ]);
+    }
+
+    if (params.pedido) ui.get('ME23N', { pedido: params.pedido }).then(editar, inicial);
     else inicial();
   }`,
 };
@@ -288,12 +496,12 @@ export const ME2N = {
     if (params.centro) add('p.centro = ?', String(params.centro).slice(0, 64));
     if (params.estado) add('pc.estado = ?', String(params.estado).slice(0, 12));
     if (params.solo_pendientes === 'true' || params.solo_pendientes === true) {
-      filtros.push('p.cantidad > p.cantidad_recibida');
+      filtros.push('p.cantidad > p.cantidad_recibida AND NOT p.borrado');
     }
     const r = await client.query(
       `SELECT pc.ebeln, p.ebelp, pc.proveedor_id, pr.nombre AS nombre_proveedor, pc.fecha_documento,
               pc.estado, p.sku, p.texto_breve, p.cantidad, p.cantidad_recibida,
-              GREATEST(p.cantidad - p.cantidad_recibida, 0) AS pendiente, p.unidad,
+              CASE WHEN p.borrado THEN 0 ELSE GREATEST(p.cantidad - p.cantidad_recibida, 0) END AS pendiente, p.unidad, p.borrado,
               p.precio_neto, ROUND(p.cantidad * p.precio_neto, 2) AS valor_neto, p.centro, p.fecha_entrega
        FROM erp_pedidos_compra pc
        JOIN erp_pedidos_compra_pos p ON p.tenant_id = pc.tenant_id AND p.ebeln = pc.ebeln
@@ -341,4 +549,4 @@ export const ME2N = {
   }`,
 };
 
-export default [ME21N, ME23N, ME2N];
+export default [ME21N, ME22N, ME23N, ME2N];

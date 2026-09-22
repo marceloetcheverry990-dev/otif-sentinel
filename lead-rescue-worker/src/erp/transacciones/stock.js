@@ -38,7 +38,7 @@ export const MMBE = {
        LEFT JOIN depots d ON d.tenant_id = i.tenant_id AND d.depot_id = i.depot_id
        LEFT JOIN (
          SELECT centro, sku, SUM(GREATEST(cantidad - cantidad_recibida, 0)) AS en_pedido
-         FROM erp_pedidos_compra_pos WHERE tenant_id = $1 GROUP BY centro, sku
+         FROM erp_pedidos_compra_pos WHERE tenant_id = $1 AND NOT borrado GROUP BY centro, sku
        ) oc ON oc.centro = i.depot_id AND oc.sku = i.sku
        LEFT JOIN (
          SELECT q.depot_id, q.sku, SUM(q.qty) AS demanda
