@@ -40,6 +40,7 @@ export const renderLayout = ({
               <span class="header-operator">${escapeHTML((operatorSession && (operatorSession.display_name || operatorSession.username)) || 'Operador')}</span>
             </div>
             <button type="button" onclick="window.open('/dashboard/executive','_blank')" class="btn btn-dashboards">Dashboards</button>
+            <button type="button" onclick="window.open('/erp','_blank')" class="btn btn-dashboards" title="ERP módulo MM (compras, stock, proveedores)">ERP</button>
             <button type="button" id="operatorLogout" class="btn btn-logout">Salir</button>
           </div>
         </div>

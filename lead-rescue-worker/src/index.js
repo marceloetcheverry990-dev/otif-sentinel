@@ -91,6 +91,8 @@ import { handleOperatorMe, handleListOperators, handleCreateOperator } from './a
 import { handleLoginPage } from './api/login-page.js'; // PÃ¡gina HTML de login
 import { handleListDepots, handleCreateDepot } from './api/depots.js';
 import { handleBodega } from './api/bodega.js';
+import { handleErpApi } from './api/erp.js';
+import { renderErpPage } from './erp/ui/page.js';
 import { listGuiasDespacho, retryGuiasDespacho } from './api/guias-despacho.js';
 import {
   verifyOperatorTenant,
@@ -334,6 +336,24 @@ export default {
       return runOperatorMutation(request, env, ctx, 'bodega.ot.packing', (req, e, op) =>
         handleBodega(req, e, op)
       );
+    }
+
+    // ── ERP (módulo MM tipo SAP) — misma sesión de operador que la Torre ──
+    if (request.method === "GET" && (url.pathname === "/erp" || url.pathname === "/erp/")) {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return Response.redirect(new URL("/login?next=/erp", url).toString(), 302);
+      return renderErpPage(access.payload);
+    }
+    if (url.pathname.startsWith("/api/erp/")) {
+      if (request.method === "POST") {
+        const code = (url.pathname.split("/")[4] || "desconocida").toLowerCase().replace(/[^a-z0-9_]/g, "");
+        return runOperatorMutation(request, env, ctx, `erp.${code}`, (req, e, op) =>
+          handleErpApi(req, e, op)
+        );
+      }
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
+      return handleErpApi(request, env, access.payload);
     }
 
     // ---> NUEVAS RUTAS: APP MÃ“VIL (B2B) <---

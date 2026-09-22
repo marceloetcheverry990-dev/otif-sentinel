@@ -152,7 +152,8 @@ export function handleLoginPage(request, env) {
         if (res.ok && data.success) {
           window.__loginNavigating = true;
           btn.textContent = 'Entrando...';
-          window.location.replace('/control-tower');
+          var next = new URLSearchParams(window.location.search).get('next');
+          window.location.replace(next === '/erp' ? '/erp' : '/control-tower');
           return;
         }
 

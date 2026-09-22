@@ -561,6 +561,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               <span class="header-operator">Operador</span>
             </div>
             <button type="button" onclick="window.open('/dashboard/executive','_blank')" class="btn btn-dashboards">Dashboards</button>
+            <button type="button" onclick="window.open('/erp','_blank')" class="btn btn-dashboards" title="ERP módulo MM (compras, stock, proveedores)">ERP</button>
             <button type="button" id="operatorLogout" class="btn btn-logout">Salir</button>
           </div>
         </div>
@@ -5275,6 +5276,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               <span class="header-operator">Operador</span>
             </div>
             <button type="button" onclick="window.open('/dashboard/executive','_blank')" class="btn btn-dashboards">Dashboards</button>
+            <button type="button" onclick="window.open('/erp','_blank')" class="btn btn-dashboards" title="ERP módulo MM (compras, stock, proveedores)">ERP</button>
             <button type="button" id="operatorLogout" class="btn btn-logout">Salir</button>
           </div>
         </div>

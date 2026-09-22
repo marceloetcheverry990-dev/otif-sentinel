@@ -44,6 +44,7 @@ export default defineConfig({
       'src/api/bodega.test.js',
       'src/helpers/operator-auth.test.js',
       'src/api/operator-login.test.js',
+      'src/erp/erp.test.js',
     ],
   },
 });
