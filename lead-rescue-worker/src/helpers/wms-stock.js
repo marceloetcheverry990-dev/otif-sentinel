@@ -140,6 +140,19 @@ export async function ensureWmsSchema(client) {
       PRIMARY KEY (tenant_id, ot_id, sku)
     )
   `);
+  // Líneas de OTs que quedaron en QUIEBRE: sin esto no hay cómo reintentar la
+  // reserva cuando llega stock (orden_lineas solo se escribe si la reserva pasa).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS orden_lineas_quiebre (
+      tenant_id   VARCHAR(64)    NOT NULL,
+      ot_id       VARCHAR(120)   NOT NULL,
+      sku         VARCHAR(64)    NOT NULL,
+      qty         NUMERIC(14, 3) NOT NULL,
+      depot_id    VARCHAR(64)    NOT NULL,
+      created_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (tenant_id, ot_id, sku)
+    )
+  `);
 }
 
 async function insertMovimiento(client, { tenant_id, depot_id, sku, tipo, qty, ot_id = null, motivo = null }) {
@@ -281,20 +294,12 @@ export async function reservarOt(client, { tenant_id, ot_id, depot_id, lineas })
       [tenant_id, depot_id, sku]
     );
     if (!inv.rowCount) {
-      await client.query(
-        `UPDATE ordenes_pendientes SET estado_operacional = $3
-         WHERE tenant_id = $1 AND ot_id = $2`,
-        [tenant_id, ot_id, WMS_ESTADOS.QUIEBRE]
-      );
+      await marcarQuiebre(client, { tenant_id, ot_id, depot_id, lines });
       return { ok: false, code: 'quiebre', sku, needed: qty, disponible: 0 };
     }
     const trial = tryReserveQty(inv.rows[0].qty_disponible, inv.rows[0].qty_reservada, qty);
     if (!trial.ok) {
-      await client.query(
-        `UPDATE ordenes_pendientes SET estado_operacional = $3
-         WHERE tenant_id = $1 AND ot_id = $2`,
-        [tenant_id, ot_id, WMS_ESTADOS.QUIEBRE]
-      );
+      await marcarQuiebre(client, { tenant_id, ot_id, depot_id, lines });
       return { ok: false, code: 'quiebre', sku, needed: qty, disponible: trial.disponible };
     }
   }
@@ -326,8 +331,78 @@ export async function reservarOt(client, { tenant_id, ot_id, depot_id, lineas })
      WHERE tenant_id = $1 AND ot_id = $2`,
     [tenant_id, ot_id, WMS_ESTADOS.PENDIENTE_PICKING]
   );
+  await client.query(
+    `DELETE FROM orden_lineas_quiebre WHERE tenant_id = $1 AND ot_id = $2`,
+    [tenant_id, ot_id]
+  );
 
   return { ok: true, estado: WMS_ESTADOS.PENDIENTE_PICKING };
+}
+
+/** Deja la OT en QUIEBRE y guarda sus líneas para reintentar cuando llegue stock. */
+async function marcarQuiebre(client, { tenant_id, ot_id, depot_id, lines }) {
+  await client.query(
+    `UPDATE ordenes_pendientes SET estado_operacional = $3
+     WHERE tenant_id = $1 AND ot_id = $2`,
+    [tenant_id, ot_id, WMS_ESTADOS.QUIEBRE]
+  );
+  await client.query(
+    `DELETE FROM orden_lineas_quiebre WHERE tenant_id = $1 AND ot_id = $2`,
+    [tenant_id, ot_id]
+  );
+  for (const line of lines) {
+    await client.query(
+      `INSERT INTO orden_lineas_quiebre (tenant_id, ot_id, sku, qty, depot_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [tenant_id, ot_id, line.sku, toQty(line.qty), depot_id]
+    );
+  }
+}
+
+/**
+ * Reintenta la reserva de las OTs en QUIEBRE que esperan alguno de estos SKUs
+ * en esta bodega, en orden de llegada (FIFO). Pensado para correr justo después
+ * de una entrada de stock (MIGO 101/501/552), dentro de la misma transacción:
+ * cada OT va en su SAVEPOINT, así que un error en una no deshace la entrada.
+ */
+export async function reintentarQuiebres(client, { tenant_id, depot_id, skus, limite = 50 }) {
+  const lista = Array.from(new Set((skus || []).map((s) => String(s || '').trim()).filter(Boolean)));
+  const out = { liberadas: [], siguen: 0 };
+  if (!depot_id || !lista.length) return out;
+
+  const candidatas = await client.query(
+    `SELECT q.ot_id, MIN(o.created_at) AS llegada
+     FROM orden_lineas_quiebre q
+     JOIN ordenes_pendientes o ON o.tenant_id = q.tenant_id AND o.ot_id = q.ot_id
+     WHERE q.tenant_id = $1 AND q.depot_id = $2
+       AND o.estado_operacional = $4
+       AND q.ot_id IN (SELECT ot_id FROM orden_lineas_quiebre
+                       WHERE tenant_id = $1 AND depot_id = $2 AND sku = ANY($3::text[]))
+     GROUP BY q.ot_id
+     ORDER BY llegada ASC NULLS LAST, q.ot_id
+     LIMIT $5`,
+    [tenant_id, depot_id, lista, WMS_ESTADOS.QUIEBRE, limite]
+  );
+
+  for (const { ot_id } of candidatas.rows) {
+    const lineas = await client.query(
+      `SELECT sku, qty FROM orden_lineas_quiebre WHERE tenant_id = $1 AND ot_id = $2`,
+      [tenant_id, ot_id]
+    );
+    await client.query('SAVEPOINT wms_reintento');
+    try {
+      const r = await reservarOt(client, { tenant_id, ot_id, depot_id, lineas: lineas.rows });
+      await client.query('RELEASE SAVEPOINT wms_reintento');
+      if (r.ok && !r.already) out.liberadas.push(ot_id);
+      else out.siguen += 1;
+    } catch (e) {
+      await client.query('ROLLBACK TO SAVEPOINT wms_reintento');
+      await client.query('RELEASE SAVEPOINT wms_reintento');
+      console.warn('[WMS_REINTENTO]', ot_id, e.message);
+      out.siguen += 1;
+    }
+  }
+  return out;
 }
 
 export async function confirmarPicking(client, { tenant_id, ot_id }) {

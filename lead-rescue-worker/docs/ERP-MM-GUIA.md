@@ -91,6 +91,10 @@ Enlace directo a una transacción: `/erp#MMBE?material=SKU-1`.
    - Presiona **Contabilizar**. Nace el documento `5000000000` y **el stock sube**.
    - El pedido queda PARCIAL si falta algo, o CERRADO si llegó todo.
 5. La Torre ya ve ese stock. Cuando entra un pedido de venta con ese SKU, la Torre lo **reserva**; **MMBE** lo muestra como "Reservado (Torre)".
+   - Si el pedido de venta llegó **antes** que la mercadería, queda en **QUIEBRE** y MMBE lo muestra en la columna "Demanda en quiebre".
+   - Al contabilizar un MIGO que sube stock (101, 501 o una anulación 552), el sistema reintenta solo esos pedidos, del más antiguo al más nuevo, y los pasa a picking.
+   - El mensaje verde dice cuáles se liberaron. **Verificar** te muestra cuáles se liberarían, sin grabar.
+   - El botón "Pedir" de MMBE sugiere una cantidad que ya incluye esa demanda.
 6. Cuando la Torre confirma el **packing**, el reservado se descuenta y en **MB51** aparece como **601**.
 7. ¿Te equivocaste? **MIGO → A03 Anulación → documento**.
    - Crea el movimiento inverso (102/502/552) y devuelve lo recibido al pedido.

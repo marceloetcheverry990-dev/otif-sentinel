@@ -15,6 +15,7 @@ import {
   siguienteNumero, RANGOS, validarCentro, estadoPedido, operadorDe,
 } from '../core.js';
 import { leerPedido } from './pedido.js';
+import { isWmsEnabledForTenant, reintentarQuiebres } from '../../helpers/wms-stock.js';
 
 export const CLASES_MOVIMIENTO = Object.freeze({
   101: { texto: 'EM entrada de mercancías por pedido', signo: +1, anulacion: '102' },
@@ -237,6 +238,27 @@ async function anular(client, tenant_id, body, cab) {
   return { mblnr, posiciones: zeile, anulado: doc.cabecera.mblnr };
 }
 
+// Clases que suben stock libre: tras contabilizarlas se reintenta reservar los
+// pedidos de venta de la Torre que estaban en QUIEBRE esperando esos materiales.
+const CLASES_ENTRADA = ['101', '501', '552'];
+
+async function liberarQuiebres(client, env, tenant_id, mblnr) {
+  if (!(await isWmsEnabledForTenant(client, env, tenant_id))) return [];
+  const r = await client.query(
+    `SELECT centro, array_agg(DISTINCT sku) AS skus
+     FROM erp_documentos_material_pos
+     WHERE tenant_id = $1 AND mblnr = $2 AND clase_movimiento = ANY($3::text[])
+     GROUP BY centro`,
+    [tenant_id, mblnr, CLASES_ENTRADA]
+  );
+  const liberadas = [];
+  for (const { centro, skus } of r.rows) {
+    const res = await reintentarQuiebres(client, { tenant_id, depot_id: centro, skus });
+    liberadas.push(...res.liberadas);
+  }
+  return liberadas;
+}
+
 export const MIGO = {
   code: 'MIGO',
   titulo: 'Movimiento de mercancías',
@@ -246,7 +268,7 @@ export const MIGO = {
     if (params.pedido) return { pedido: await leerPedido(client, tenant_id, params.pedido) };
     throw fallo('Indique un pedido o un documento de material');
   },
-  async post({ client, tenant_id, body, operator }) {
+  async post({ client, tenant_id, body, operator, env }) {
     const cab = {
       fechaContab: fecha(body.fecha_contabilizacion, { campo: 'Fecha de contabilización' }),
       textoCab: texto(body.texto_cabecera, { campo: 'Texto cabecera', max: 160 }),
@@ -261,13 +283,17 @@ export const MIGO = {
       else if (clase === '501' || clase === '551') r = await movimientoLibre(client, tenant_id, body, cab, clase);
       else throw fallo(`Clase de movimiento ${clase || '(vacía)'} no soportada en MIGO`);
     }
+    const liberadas = await liberarQuiebres(client, env, tenant_id, r.mblnr);
+    const extra = liberadas.length
+      ? ` · ${liberadas.length} pedido(s) de venta liberado(s) de quiebre: ${liberadas.slice(0, 5).join(', ')}${liberadas.length > 5 ? '…' : ''}`
+      : '';
     if (body.solo_verificar) {
-      throw new Verificado(`Verificación correcta: ${r.posiciones} posición(es) se pueden contabilizar`);
+      throw new Verificado(`Verificación correcta: ${r.posiciones} posición(es) se pueden contabilizar${extra.replace('liberado(s)', 'se liberarían')}`);
     }
     const mensaje = r.anulado
-      ? `Documento ${r.anulado} anulado con el documento de material ${r.mblnr}`
-      : `Documento de material ${r.mblnr} contabilizado`;
-    return { mensaje, documento: r.mblnr };
+      ? `Documento ${r.anulado} anulado con el documento de material ${r.mblnr}${extra}`
+      : `Documento de material ${r.mblnr} contabilizado${extra}`;
+    return { mensaje, documento: r.mblnr, liberadas, invalidarTorre: true };
   },
   screen: `function (ui, params) {
     var estado = {

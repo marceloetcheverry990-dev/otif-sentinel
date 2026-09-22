@@ -6,6 +6,7 @@ import {
   consumeReservaQty,
   WMS_ESTADOS,
   reservarOt,
+  reintentarQuiebres,
 } from './wms-stock.js';
 
 function makeMockClient({ estado = 'PENDIENTE_RUTEO', qtyDisponible = 5, qtyReservada = 0 } = {}) {
@@ -113,5 +114,55 @@ describe('reservarOt — SKU repetido en la misma reserva no debe descontar dos 
     expect(calls.update[0]).toEqual({ sku: 'SKU-A', qty: 4 });
     expect(calls.insertLinea).toHaveLength(1);
     expect(calls.insertLinea[0]).toEqual({ sku: 'SKU-A', qty: 4 });
+  });
+});
+
+describe('quiebre guarda sus líneas para reintentar cuando llega stock', () => {
+  it('reservarOt en quiebre persiste las líneas (mergeadas) en orden_lineas_quiebre', async () => {
+    const { client } = makeMockClient({ qtyDisponible: 1 });
+    const r = await reservarOt(client, {
+      tenant_id: 't1', ot_id: 'OT-9', depot_id: 'D1',
+      lineas: [{ sku: 'SKU-A', qty: 2 }, { sku: 'SKU-A', qty: 1 }],
+    });
+    expect(r.code).toBe('quiebre');
+    const sqls = client.query.mock.calls.map(([s, p]) => [String(s), p]);
+    expect(sqls.some(([s]) => s.includes('DELETE FROM orden_lineas_quiebre'))).toBe(true);
+    const ins = sqls.filter(([s]) => s.includes('INSERT INTO orden_lineas_quiebre'));
+    expect(ins.map(([, p]) => p)).toEqual([['t1', 'OT-9', 'SKU-A', 3, 'D1']]);
+  });
+
+  it('reserva exitosa limpia las líneas de quiebre de esa OT', async () => {
+    const { client } = makeMockClient({ estado: 'QUIEBRE', qtyDisponible: 10 });
+    const r = await reservarOt(client, { tenant_id: 't1', ot_id: 'OT-9', depot_id: 'D1', lineas: [{ sku: 'SKU-A', qty: 3 }] });
+    expect(r.ok).toBe(true);
+    const del = client.query.mock.calls.find(([s]) => String(s).includes('DELETE FROM orden_lineas_quiebre'));
+    expect(del[1]).toEqual(['t1', 'OT-9']);
+  });
+
+  it('reintentarQuiebres libera en orden FIFO y aísla cada OT con SAVEPOINT', async () => {
+    const stock = { 'SKU-A': 4 };
+    const lineasPorOt = { 'OT-1': [{ sku: 'SKU-A', qty: 3 }], 'OT-2': [{ sku: 'SKU-A', qty: 3 }] };
+    const query = vi.fn(async (sql, p) => {
+      const s = String(sql);
+      if (s.includes('GROUP BY q.ot_id')) return { rowCount: 2, rows: [{ ot_id: 'OT-1' }, { ot_id: 'OT-2' }] };
+      if (s.includes('SELECT sku, qty FROM orden_lineas_quiebre')) return { rowCount: 1, rows: lineasPorOt[p[1]] };
+      if (s.includes('FROM ordenes_pendientes') && s.includes('FOR UPDATE')) return { rowCount: 1, rows: [{ ot_id: p[1], estado_operacional: 'QUIEBRE' }] };
+      if (s.includes('FROM inventario_bodega') && s.includes('FOR UPDATE')) return { rowCount: 1, rows: [{ qty_disponible: stock[p[2]], qty_reservada: 0 }] };
+      if (s.includes('UPDATE inventario_bodega')) { stock[p[2]] -= p[3]; return { rowCount: 1 }; }
+      return { rowCount: 0, rows: [] };
+    });
+    const r = await reintentarQuiebres({ query }, { tenant_id: 't1', depot_id: 'D1', skus: ['SKU-A', 'SKU-A', ''] });
+    expect(r).toEqual({ liberadas: ['OT-1'], siguen: 1 });
+    expect(stock['SKU-A']).toBe(1);
+    const sp = query.mock.calls.map(([s]) => String(s)).filter((s) => s.includes('SAVEPOINT wms_reintento'));
+    expect(sp).toEqual(['SAVEPOINT wms_reintento', 'RELEASE SAVEPOINT wms_reintento', 'SAVEPOINT wms_reintento', 'RELEASE SAVEPOINT wms_reintento']);
+    const cand = query.mock.calls.find(([s]) => String(s).includes('GROUP BY q.ot_id'));
+    expect(cand[1][2]).toEqual(['SKU-A']);
+  });
+
+  it('reintentarQuiebres sin SKUs no consulta nada', async () => {
+    const query = vi.fn();
+    expect(await reintentarQuiebres({ query }, { tenant_id: 't1', depot_id: 'D1', skus: [] })).toEqual({ liberadas: [], siguen: 0 });
+    expect(query).not.toHaveBeenCalled();
   });
 });

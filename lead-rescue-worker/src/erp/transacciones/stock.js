@@ -23,13 +23,15 @@ export const MMBE = {
       filtros.push(`i.depot_id = $${valores.length}`);
     }
     if (params.solo_bajo_minimo === 'true') filtros.push('i.qty_disponible < i.qty_minima');
+    if (params.solo_quiebre === 'true') filtros.push('COALESCE(qb.demanda, 0) > 0');
     const r = await client.query(
       `SELECT i.sku, p.nombre, p.unidad, i.depot_id AS centro, d.nombre AS nombre_centro,
               i.qty_disponible AS libre_utilizacion, i.qty_reservada AS reservado,
               COALESCE(oc.en_pedido, 0) AS en_pedido,
               i.qty_disponible + i.qty_reservada AS stock_total,
               i.qty_minima AS punto_pedido, i.ubicacion,
-              (i.qty_disponible < i.qty_minima) AS bajo_minimo,
+              COALESCE(qb.demanda, 0) AS demanda_quiebre,
+              (i.qty_disponible < i.qty_minima OR COALESCE(qb.demanda, 0) > 0) AS bajo_minimo,
               ROUND((i.qty_disponible + i.qty_reservada) * COALESCE(p.precio_estandar, 0), 2) AS valor
        FROM inventario_bodega i
        LEFT JOIN productos p ON p.tenant_id = i.tenant_id AND p.sku = i.sku
@@ -38,6 +40,13 @@ export const MMBE = {
          SELECT centro, sku, SUM(GREATEST(cantidad - cantidad_recibida, 0)) AS en_pedido
          FROM erp_pedidos_compra_pos WHERE tenant_id = $1 GROUP BY centro, sku
        ) oc ON oc.centro = i.depot_id AND oc.sku = i.sku
+       LEFT JOIN (
+         SELECT q.depot_id, q.sku, SUM(q.qty) AS demanda
+         FROM orden_lineas_quiebre q
+         JOIN ordenes_pendientes o ON o.tenant_id = q.tenant_id AND o.ot_id = q.ot_id
+         WHERE q.tenant_id = $1 AND o.estado_operacional = 'QUIEBRE'
+         GROUP BY q.depot_id, q.sku
+       ) qb ON qb.depot_id = i.depot_id AND qb.sku = i.sku
        WHERE ${filtros.join(' AND ')}
        ORDER BY i.sku, i.depot_id
        LIMIT 1000`,
@@ -49,7 +58,8 @@ export const MMBE = {
     ui.pantalla(ui.grupo('Criterios de selección',
       ui.campo({ id: 'material', etiqueta: 'Material', f4: 'material', valor: params.material || '' }) +
       ui.campo({ id: 'centro', etiqueta: 'Centro', f4: 'centro', valor: params.centro || '' }) +
-      ui.campo({ id: 'solo_bajo_minimo', etiqueta: 'Solo bajo punto de pedido', tipo: 'check', valor: params.solo_bajo_minimo === 'true' })
+      ui.campo({ id: 'solo_bajo_minimo', etiqueta: 'Solo bajo punto de pedido', tipo: 'check', valor: params.solo_bajo_minimo === 'true' }) +
+      ui.campo({ id: 'solo_quiebre', etiqueta: 'Solo con pedidos en quiebre', tipo: 'check', valor: params.solo_quiebre === 'true' })
     ) + '<div id="resultado"></div>');
     async function ejecutar() {
       var data = await ui.get('MMBE', ui.valores());
@@ -61,17 +71,19 @@ export const MMBE = {
         { id: 'libre_utilizacion', etiqueta: 'Libre utilización', tipo: 'qty' },
         { id: 'reservado', etiqueta: 'Reservado (Torre)', tipo: 'qty' },
         { id: 'en_pedido', etiqueta: 'En pedido', tipo: 'qty' },
+        { id: 'demanda_quiebre', etiqueta: 'Demanda en quiebre', tipo: 'qty' },
         { id: 'stock_total', etiqueta: 'Stock total', tipo: 'qty' },
         { id: 'unidad', etiqueta: 'UMB' },
         { id: 'punto_pedido', etiqueta: 'Punto pedido', tipo: 'qty' },
         { id: 'valor', etiqueta: 'Valor (CLP)', tipo: 'money' },
         { id: 'bajo_minimo', etiqueta: '', tipo: 'accion', texto: 'Pedir', mostrar: function (f) { return f.bajo_minimo; },
           enlace: function (f) {
-            var falta = Math.max(Number(f.punto_pedido) * 2 - Number(f.libre_utilizacion) - Number(f.en_pedido), 1);
+            // Cubrir lo que esperan los pedidos en quiebre y reponer hasta 2× el punto de pedido.
+            var falta = Math.max(Number(f.punto_pedido) * 2 + Number(f.demanda_quiebre) - Number(f.libre_utilizacion) - Number(f.en_pedido), 1);
             ui.ir('ME21N', { material: f.sku, centro: f.centro, cantidad: falta });
           } },
       ], data.stocks, { resaltar: function (f) { return f.bajo_minimo; } });
-      ui.mensaje(bajos ? 'W' : 'S', data.stocks.length + ' línea(s) de stock' + (bajos ? ' — ' + bajos + ' bajo punto de pedido' : ''));
+      ui.mensaje(bajos ? 'W' : 'S', data.stocks.length + ' línea(s) de stock' + (bajos ? ' — ' + bajos + ' requieren reposición (bajo punto de pedido o con pedidos en quiebre)' : ''));
     }
     ui.botones([{ texto: 'Ejecutar', tecla: 'F8', primario: true, accion: ejecutar }]);
     ejecutar();

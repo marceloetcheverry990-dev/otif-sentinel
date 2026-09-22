@@ -11,6 +11,7 @@ import { withDb, withDbTransaction } from '../db.js';
 import { ErpError } from '../erp/core.js';
 import { ensureErpSchema, erpSchemaListo } from '../erp/schema.js';
 import { TRANSACCIONES, AYUDAS_F4 } from '../erp/registry.js';
+import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -67,7 +68,7 @@ export async function handleErpApi(request, env, operator = null) {
   const tx = TRANSACCIONES[code];
   if (!tx) return json({ tipo: 'E', mensaje: `La transacción ${code} no existe` }, 404);
 
-  const ctx = { tenant_id, operator };
+  const ctx = { tenant_id, operator, env };
 
   try {
     await prepararEsquema(env, tenant_id);
@@ -94,7 +95,11 @@ export async function handleErpApi(request, env, operator = null) {
       }
       const data = await withDbTransaction(env, (client) =>
         tx.post({ ...ctx, client, body }), { tenantId: tenant_id });
-      return json({ tipo: 'S', ...data });
+      // Si la transacción cambió estados que ve la Torre (ej. MIGO liberó quiebres),
+      // que el próximo poll no sirva la caché vieja.
+      const { invalidarTorre, ...resto } = data || {};
+      if (invalidarTorre) invalidateTowerPoll(tenant_id);
+      return json({ tipo: 'S', ...resto });
     }
 
     return json({ tipo: 'E', mensaje: 'Método no permitido' }, 405);

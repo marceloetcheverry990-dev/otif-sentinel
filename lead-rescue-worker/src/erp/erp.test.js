@@ -132,6 +132,45 @@ describe('MIGO', () => {
     expect(msegs[0].params[10]).toBe(4000); // importe = 4 × 1000
   });
 
+  it('101 con WMS activo reintenta los pedidos de venta en quiebre y lo informa', async () => {
+    const base = clientePedido();
+    let reservado = false;
+    const c = crearCliente([
+      [/FROM tenant_settings/, () => [{ wms_enabled: true }]],
+      [/array_agg\(DISTINCT sku\)/, () => [{ centro: 'empresa_base-central', skus: ['SKU-1'] }]],
+      [/GROUP BY q\.ot_id/, () => [{ ot_id: 'OT-QUIEBRE-1' }]],
+      [/SELECT sku, qty FROM orden_lineas_quiebre/, () => [{ sku: 'SKU-1', qty: '3' }]],
+      [/FROM ordenes_pendientes\s+WHERE tenant_id = \$1 AND ot_id = \$2 FOR UPDATE/, () => [{ ot_id: 'OT-QUIEBRE-1', estado_operacional: 'QUIEBRE' }]],
+      [/SELECT qty_disponible, qty_reservada FROM inventario_bodega/, () => [{ qty_disponible: '9', qty_reservada: '0' }]],
+      [/qty_reservada = qty_reservada \+/, () => { reservado = true; return []; }],
+    ]);
+    const q = c.query.bind(c);
+    c.query = async (sql, params) => {
+      const r = await q(sql, params);
+      return r.rowCount ? r : base.query(sql, params);
+    };
+    const r = await TRANSACCIONES.MIGO.post({
+      client: c, tenant_id: 'empresa_base', operator: OPERADOR, env: { WMS_ENABLED: 'true' },
+      body: { clase_movimiento: '101', pedido: '4500000000', posiciones: [{ ok: true, ebelp: 10, cantidad: 4 }] },
+    });
+    expect(reservado).toBe(true);
+    expect(r.liberadas).toEqual(['OT-QUIEBRE-1']);
+    expect(r.mensaje).toMatch(/1 pedido\(s\) de venta liberado\(s\) de quiebre: OT-QUIEBRE-1/);
+    expect(r.invalidarTorre).toBe(true);
+    const agg = c.consultas.find((x) => /array_agg/.test(x.sql));
+    expect(agg.params[2]).toEqual(['101', '501', '552']);
+  });
+
+  it('101 con WMS apagado no toca los quiebres', async () => {
+    const c = clientePedido();
+    const r = await TRANSACCIONES.MIGO.post({
+      client: c, tenant_id: 'empresa_base', operator: OPERADOR, env: {},
+      body: { clase_movimiento: '101', pedido: '4500000000', posiciones: [{ ok: true, ebelp: 10, cantidad: 4 }] },
+    });
+    expect(r.liberadas).toEqual([]);
+    expect(c.consultas.some((x) => /orden_lineas_quiebre|array_agg/.test(x.sql))).toBe(false);
+  });
+
   it('101 rechaza entregar más de lo pendiente', async () => {
     const c = clientePedido({ recibido: 8 });
     await expect(TRANSACCIONES.MIGO.post({
