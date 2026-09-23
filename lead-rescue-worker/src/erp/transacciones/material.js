@@ -160,10 +160,19 @@ const PANTALLA_MATERIAL = `function (ui, params, modo) {
   async function grabar() {
     var v = ui.valores();
     var r = await ui.post(modo === 'crear' ? 'MM01' : 'MM02', v);
-    ui.mensaje('S', r.mensaje);
+    if (modo === 'crear') {
+      // Como en SAP: al crear se vuelve a la pantalla inicial, con el campo
+      // vacío y listo para el material siguiente. Que la pantalla cambie es
+      // la señal de que grabó; el mensaje verde solo acompaña.
+      params = {};
+      ui.titulo(null);
+      pantallaInicial();
+      ui.mensaje('S', r.mensaje);
+      return;
+    }
     var data = await ui.get('MM03', { material: r.material });
-    modo = 'modificar';
     detalle(data);
+    ui.mensaje('S', r.mensaje);
   }
 
   if (params.material && modo !== 'crear') {

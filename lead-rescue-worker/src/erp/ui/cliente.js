@@ -47,6 +47,26 @@ export const ERP_CLIENTE_SCRIPT = `
     var p = s.split('-');
     return p.length === 3 ? p[2] + '.' + p[1] + '.' + p[0] : s;
   }
+  // Lee un número escrito a la chilena (el punto son los miles, la coma decimal).
+  // Misma regla que numeroCL del servidor: acá solo sirve para mostrar totales
+  // mientras se escribe; el que vale es el del servidor.
+  function numeroCL(v) {
+    var s = String(v == null ? '' : v).trim().replace(/\s/g, '');
+    if (!s) return NaN;
+    var punto = s.indexOf('.') >= 0;
+    var coma = s.indexOf(',') >= 0;
+    if (punto && coma) {
+      var decimal = s.lastIndexOf(',') > s.lastIndexOf('.') ? ',' : '.';
+      var miles = decimal === ',' ? '.' : ',';
+      s = s.split(miles).join('').replace(decimal, '.');
+    } else if (coma) {
+      s = s.replace(',', '.');
+    } else if (punto && /^[0-9]{1,3}(\.[0-9]{3})+$/.test(s)) {
+      s = s.split('.').join('');
+    }
+    return Number(s);
+  }
+
   function hoy() {
     var d = new Date();
     var m = String(d.getMonth() + 1).padStart(2, '0');
@@ -108,7 +128,7 @@ export const ERP_CLIENTE_SCRIPT = `
   function crearUi(gen, tx) {
     function vigente() { return gen === generacion; }
     var ui = {
-      esc: esc, num: num, dinero: dinero, fecha: fecha, hoy: hoy,
+      esc: esc, num: num, dinero: dinero, fecha: fecha, hoy: hoy, numeroCL: numeroCL,
       mensaje: function (t, m) { if (vigente()) mensaje(t, m); },
       titulo: function (t) { if (vigente()) tituloEl.textContent = t || tx.titulo; },
       pantalla: function (html) { if (!vigente()) return; enlaces = []; contenido.innerHTML = html; },
@@ -138,9 +158,13 @@ export const ERP_CLIENTE_SCRIPT = `
         } else if (o.tipo === 'check') {
           control = '<input type="checkbox" id="' + id + '" data-campo="' + esc(o.id) + '"' + (o.valor ? ' checked' : '') + (lectura ? ' disabled' : '') + '>';
         } else {
-          var tipo = o.tipo === 'number' ? 'number' : o.tipo === 'date' ? 'date' : 'text';
+          // Los numéricos van como texto a propósito: con type="number" el
+          // navegador reinterpreta "4.500" según su idioma antes de que lo
+          // veamos. Acá viaja tal cual y lo lee numeroCL en el servidor.
+          var tipo = o.tipo === 'date' ? 'date' : 'text';
+          var numerico = o.tipo === 'number';
           control = '<input type="' + tipo + '" id="' + id + '" data-campo="' + esc(o.id) + '" value="' + esc(o.valor == null ? '' : o.valor) + '"' +
-            (tipo === 'number' ? ' step="any" min="0"' : '') +
+            (numerico ? ' inputmode="decimal" class="erp-numerico"' : '') +
             ' style="width:' + ((o.ancho || 18) + 2) + 'ch"' + (lectura ? ' readonly tabindex="-1"' : '') +
             (o.obligatorio ? ' required' : '') + ' autocomplete="off">';
           if (o.f4 && !lectura) control += '<button type="button" class="erp-f4" data-f4="' + esc(o.f4) + '" data-para="' + id + '" title="Ayuda de búsqueda (F4)" tabindex="-1">⌕</button>';
@@ -153,9 +177,10 @@ export const ERP_CLIENTE_SCRIPT = `
         var id = 'f' + o.fila + '-' + o.col;
         var attrs = ' id="' + id + '" data-fila="' + o.fila + '" data-col="' + esc(o.col) + '"' + (o.soloLectura ? ' disabled' : '');
         if (o.tipo === 'check') return '<input type="checkbox"' + attrs + (o.valor ? ' checked' : '') + '>';
-        var tipo = o.tipo === 'number' ? 'number' : o.tipo === 'date' ? 'date' : 'text';
+        var tipo = o.tipo === 'date' ? 'date' : 'text';
         var html = '<input type="' + tipo + '"' + attrs + ' value="' + esc(o.valor == null ? '' : o.valor) + '"' +
-          (tipo === 'number' ? ' step="any" min="0"' : '') + (o.ancho ? ' style="width:' + (o.ancho + 2) + 'ch"' : '') + ' autocomplete="off">';
+          (o.tipo === 'number' ? ' inputmode="decimal" class="erp-numerico"' : '') +
+          (o.ancho ? ' style="width:' + (o.ancho + 2) + 'ch"' : '') + ' autocomplete="off">';
         if (o.f4 && !o.soloLectura) html += '<button type="button" class="erp-f4" data-f4="' + esc(o.f4) + '" data-para="' + id + '" title="Ayuda de búsqueda (F4)" tabindex="-1">⌕</button>';
         return '<span class="erp-celda">' + html + '</span>';
       },

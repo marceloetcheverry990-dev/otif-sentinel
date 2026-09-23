@@ -146,13 +146,31 @@ export const ME21N = {
         ui.grupo('Resumen de posiciones',
           '<table class="erp-tabla erp-tabla-editable"><thead><tr>' +
           '<th>Pos.</th><th>Material</th><th>Texto breve</th><th>Cantidad</th><th>UM</th><th>Precio neto</th><th>Centro</th><th>Fecha entrega</th>' +
-          '</tr></thead><tbody>' + celdas() + '</tbody></table>'
+          '</tr></thead><tbody>' + celdas() + '</tbody></table>' +
+          '<p class="erp-total">Valor neto total: <b id="total-pedido">0</b> CLP</p>'
         )
       );
       ui.qa('[data-col="material"]').forEach(function (inp) {
         inp.addEventListener('change', function () { completarMaterial(Number(inp.dataset.fila), inp.value); });
       });
+      // Total en vivo: antes el valor neto solo aparecia al apretar Verificar,
+      // en la barra de estado de abajo, donde casi nadie lo mira.
+      ui.qa('.erp-tabla-editable input').forEach(function (inp) {
+        inp.addEventListener('input', totalizar);
+      });
+      totalizar();
       filas.forEach(function (f, i) { if (f.material && !f.texto_breve) completarMaterial(i, f.material); });
+    }
+
+    function totalizar() {
+      var total = ui.filas().reduce(function (s, f) {
+        var q = ui.numeroCL(f.cantidad);
+        var p = ui.numeroCL(f.precio_neto);
+        if (!f.material || !isFinite(q) || !isFinite(p)) return s;
+        return s + q * p;
+      }, 0);
+      var el = ui.q('#total-pedido');
+      if (el) el.textContent = ui.dinero(total);
     }
 
     async function completarMaterial(i, sku) {
@@ -168,6 +186,7 @@ export const ME21N = {
       if (celdaUm) celdaUm.textContent = data.material.unidad;
       var precio = ui.q('[data-fila="' + i + '"][data-col="precio_neto"]');
       if (precio && !precio.value) precio.value = data.material.precio_estandar || '';
+      totalizar();
     }
 
     function cuerpo(soloVerificar) {

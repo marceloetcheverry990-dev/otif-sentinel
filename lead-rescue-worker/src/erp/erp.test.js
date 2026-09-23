@@ -5,7 +5,7 @@ vi.mock('../db.js', () => ({
   withDbTransaction: vi.fn(async (_env, fn) => fn(globalThis.__erpClient)),
 }));
 
-import { rutChileno, cantidad, estadoPedido, ErpError, siguienteNumero, RANGOS } from './core.js';
+import { rutChileno, cantidad, importe, numeroCL, estadoPedido, ErpError, siguienteNumero, RANGOS } from './core.js';
 import { TRANSACCIONES, validarRegistro, catalogoCliente } from './registry.js';
 import { renderErpPage } from './ui/page.js';
 import { handleErpApi } from '../api/erp.js';
@@ -50,6 +50,26 @@ describe('core: validaciones', () => {
     expect(() => cantidad('0')).toThrow(/mayor que cero/);
     expect(() => cantidad('-1')).toThrow(ErpError);
     expect(cantidad('0', { permitirCero: true })).toBe(0);
+  });
+
+  it('lee números como se escriben en Chile (el punto son los miles)', () => {
+    expect(numeroCL('4.500')).toBe(4500);
+    expect(numeroCL('1.234.567')).toBe(1234567);
+    expect(numeroCL('4.500,50')).toBe(4500.5);
+    expect(numeroCL('4,5')).toBe(4.5);
+    expect(numeroCL('4.5')).toBe(4.5);      // un solo dígito tras el punto: decimal, no miles
+    expect(numeroCL('4500')).toBe(4500);
+    expect(numeroCL(' 6,500 ')).toBe(6.5);
+    expect(numeroCL('1,234.56')).toBe(1234.56); // forma inglesa: manda el separador final
+    expect(Number.isNaN(numeroCL('abc'))).toBe(true);
+    expect(Number.isNaN(numeroCL(''))).toBe(true);
+  });
+
+  it('precio escrito 4.500 se graba como 4500, no como 4,5', () => {
+    expect(importe('4.500')).toBe(4500);
+    expect(importe('4.500,90')).toBe(4500.9);
+    expect(cantidad('1.500')).toBe(1500);
+    expect(cantidad('2,5')).toBe(2.5);
   });
 
   it('estado del pedido según lo recibido', () => {

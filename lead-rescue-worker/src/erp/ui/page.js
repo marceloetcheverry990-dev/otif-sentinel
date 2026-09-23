@@ -80,6 +80,9 @@ main#erp-contenido { flex: 1; overflow: auto; padding: 14px 16px 24px; }
 .erp-f4 { border: 1px solid #89919a; background: #fff; border-radius: 3px; cursor: pointer; padding: 2px 6px; color: var(--azul); }
 .erp-f4:hover { background: #ebf5fe; }
 .erp-celda { display: inline-flex; gap: 2px; align-items: center; }
+.erp-numerico { text-align: right; font-variant-numeric: tabular-nums; }
+.erp-total { text-align: right; margin: 8px 4px 0; font-size: 15px; color: var(--txt-suave); }
+.erp-total b { color: var(--txt); font-size: 17px; font-variant-numeric: tabular-nums; }
 .erp-ayuda-campo { color: var(--txt-suave); font-size: 12px; }
 .erp-ayuda { color: var(--txt-suave); margin: 6px 0; }
 

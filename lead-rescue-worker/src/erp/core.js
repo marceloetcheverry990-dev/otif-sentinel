@@ -50,8 +50,38 @@ export function texto(v, { campo, max, requerido = false } = {}) {
   return s;
 }
 
+/**
+ * Lee un número escrito como se escribe en Chile: el punto son los miles y la
+ * coma es el decimal ("4.500" = cuatro mil quinientos, "4.500,50" con decimales).
+ * También acepta la forma simple ("4500", "4.5") y la inglesa cuando no hay
+ * ambigüedad. Devuelve NaN si no es un número.
+ *
+ *   4.500     → 4500      (miles: grupos de 3)
+ *   4.500,50  → 4500.5    (manda el separador que va último)
+ *   4,5       → 4.5
+ *   4.5       → 4.5       (no son miles: el grupo no tiene 3 dígitos)
+ *   1.234.567 → 1234567
+ */
+export function numeroCL(v) {
+  let s = String(v ?? '').trim().replace(/\s| /g, '');
+  if (!s) return NaN;
+  const tienePunto = s.includes('.');
+  const tieneComa = s.includes(',');
+  if (tienePunto && tieneComa) {
+    // El último separador es el decimal; el otro son los miles.
+    const decimal = s.lastIndexOf(',') > s.lastIndexOf('.') ? ',' : '.';
+    const miles = decimal === ',' ? '.' : ',';
+    s = s.split(miles).join('').replace(decimal, '.');
+  } else if (tieneComa) {
+    s = s.replace(',', '.');
+  } else if (tienePunto && /^\d{1,3}(\.\d{3})+$/.test(s)) {
+    s = s.split('.').join(''); // 4.500 / 1.234.567 → miles
+  }
+  return Number(s);
+}
+
 export function cantidad(v, { campo = 'Cantidad', permitirCero = false } = {}) {
-  const n = Number(String(v ?? '').replace(',', '.'));
+  const n = numeroCL(v);
   if (!Number.isFinite(n) || n < 0 || (!permitirCero && n === 0)) {
     throw fallo(`${campo}: introduzca una cantidad mayor que cero`);
   }
@@ -61,7 +91,7 @@ export function cantidad(v, { campo = 'Cantidad', permitirCero = false } = {}) {
 
 export function importe(v, { campo = 'Precio' } = {}) {
   if (v == null || v === '') return 0;
-  const n = Number(String(v).replace(',', '.'));
+  const n = numeroCL(v);
   if (!Number.isFinite(n) || n < 0) throw fallo(`${campo}: importe inválido`);
   return Math.round(n * 100) / 100;
 }
