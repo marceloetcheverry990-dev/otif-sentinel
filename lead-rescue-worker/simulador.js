@@ -104,7 +104,7 @@ async function runDemo() {
   await fireWebhook(`OT-ENJOY-CORTAR-${Date.now()}`, CASO_B_CORTAR);
   await fireWebhook(`OT-FALA-PANICO-${Date.now()}`, CASO_C_PANICO);
   
-  console.log("\n🎉 Misiles disparados. Revisa la terminal de Wrangler y Telegram.");
+  console.log("\n🎉 Misiles disparados. Revisa la terminal de Wrangler y la Torre de Control.");
 }
 
 runDemo();

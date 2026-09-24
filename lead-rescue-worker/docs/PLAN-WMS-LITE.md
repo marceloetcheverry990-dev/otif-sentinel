@@ -124,7 +124,7 @@ App de bodega (scan) = fase 2, reutilizando Expo como la app chofer.
 | Cola atrasada | OTs en picking > N horas | Aviso en panel bodega |
 | Listo sin camión | `LISTA_PARA_RUTEO` sin trip | Torre prioriza esas OTs |
 
-Empezar con **alertas en UI**. WhatsApp/Telegram después (ya tienen pipes de notificación).
+Empezar con **alertas en UI**. WhatsApp/SMS después (ya tienen pipes de notificación).
 
 ---
 

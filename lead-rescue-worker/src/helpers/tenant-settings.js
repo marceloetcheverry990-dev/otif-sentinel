@@ -1,12 +1,11 @@
 /**
- * Settings por tenant (sin canal Telegram).
- * Reservado para futuros settings ops (email, webhooks, etc.).
+ * Settings por tenant: avisos a clientes (SMS/email), marca, POD, DTE y WMS.
  */
 
 import { withDb } from '../db.js';
 
 /**
- * Lee un setting tipado del tenant. Hoy no hay consumidores activos post-Telegram.
+ * Fila de tenant_settings del tenant (null si no hay o la tabla no existe).
  * @returns {Promise<object|null>}
  */
 export async function getTenantSettings(env, tenantId) {

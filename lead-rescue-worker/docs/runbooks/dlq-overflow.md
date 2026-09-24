@@ -76,7 +76,6 @@ Si sigue creciendo → la causa raíz no está resuelta. Resolver antes de repro
 | Patrón en `error_detail` | Causa probable | Runbook a seguir |
 |--------------------------|----------------|-----------------|
 | `connection refused` | DB caída | `database-connectivity.md` |
-| `telegram` / `bot` | Telegram caído | `circuit-breaker-open.md` |
 | `openai` / `OpenAI` | OpenAI caído | `circuit-breaker-open.md` |
 | `ZodError` / `validation` | Datos inválidos en payload | Sin runbook — revisar fuente de datos |
 
@@ -136,7 +135,7 @@ Los mensajes en DLQ se limpian automáticamente después de 90 días. No hacer D
 
 ### Opción C — Volumen post-incidente
 
-Si el DLQ creció durante un incidente ya resuelto (DB caída, Telegram caído), los mensajes son de la ventana del incidente. Evaluar:
+Si el DLQ creció durante un incidente ya resuelto (DB caída, OpenAI caído), los mensajes son de la ventana del incidente. Evaluar:
 1. Relevancia de los OTs afectados (¿siguen activos?)
 2. Decidir si reprocesar (Opción A) o dejar expirar (90 días)
 

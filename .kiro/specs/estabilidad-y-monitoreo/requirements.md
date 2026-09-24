@@ -22,7 +22,7 @@ This system addresses critical operational gaps: lack of structured logging, abs
 - **Log_Severity**: Classification level for log entries (DEBUG, INFO, WARN, ERROR, CRITICAL)
 - **Circuit_Breaker**: Fault tolerance pattern that prevents cascading failures by temporarily blocking operations to failing external services
 - **Performance_Threshold**: Predefined acceptable limits for response time, error rate, or resource utilization metrics
-- **Alert_Channel**: Delivery mechanism for operational notifications (Telegram, email, webhook)
+- **Alert_Channel**: Delivery mechanism for operational notifications (today: `alert_history` + monitoring dashboard; email/webhook possible later)
 - **Correlation_ID**: Unique identifier linking related operations across distributed system components (trace_id in current implementation)
 - **Dead_Letter_Queue**: Storage for messages that failed processing after maximum retry attempts requiring manual intervention
 
@@ -87,7 +87,7 @@ This system addresses critical operational gaps: lack of structured logging, abs
 
 1. THE Metrics_Collector SHALL measure HTTP request response times from request receipt to response completion in milliseconds
 2. THE Metrics_Collector SHALL measure database query execution times in milliseconds for all PostgreSQL_Database operations
-3. THE Metrics_Collector SHALL measure external API call durations for OpenAI enrichment, Telegram delivery, and other third-party integrations
+3. THE Metrics_Collector SHALL measure external API call durations for OpenAI enrichment, Mapbox routing/geocoding, and other third-party integrations
 4. THE Metrics_Collector SHALL measure queue processing throughput: messages processed per minute for MAIN_QUEUE, ENRICHMENT_QUEUE, and DELIVERY_QUEUE
 5. THE Metrics_Collector SHALL measure queue processing latency: time from message enqueue to processing completion
 6. THE Metrics_Collector SHALL track error rates as percentage: total errors divided by total operations for each endpoint and queue processor
@@ -112,7 +112,7 @@ This system addresses critical operational gaps: lack of structured logging, abs
 6. WHEN Circuit_Breaker remains open for longer than 10 minutes for any external service, THE Alert_Manager SHALL dispatch a WARN alert
 7. WHEN Dead_Letter_Queue message count exceeds 100 messages, THE Alert_Manager SHALL dispatch an ERROR alert
 8. WHEN R2_Bucket operations fail for longer than 5 minutes, THE Alert_Manager SHALL dispatch an ERROR alert
-9. THE Alert_Manager SHALL deliver alerts via Telegram to the configured SALES_TEAM_CHAT_ID or a dedicated operations channel
+9. THE Alert_Manager SHALL record every alert in `alert_history` and the Worker log, readable from the monitoring dashboard (the original Telegram channel was removed in migration 030)
 10. THE Alert_Manager SHALL include in alert messages: severity level, affected component, metric value, threshold value, timestamp, and correlation_id for investigation
 11. THE Alert_Manager SHALL implement alert deduplication to prevent notification flooding: suppress duplicate alerts within a 15-minute window
 12. THE Alert_Manager SHALL support alert escalation: IF a CRITICAL alert is not acknowledged within 10 minutes, THEN THE Alert_Manager SHALL send escalation notifications

@@ -32,7 +32,6 @@ describe('getCircuitBreakerStates — debe leer las columnas reales de system_fl
     });
     const states = await getCircuitBreakerStates({});
     expect(states.openai_breaker).toBe(true);
-    expect(states.tg_breaker).toBe(false);
   });
 
   it('breaker OPEN pero YA vencido → false (no queda abierto para siempre)', async () => {
@@ -46,13 +45,13 @@ describe('getCircuitBreakerStates — debe leer las columnas reales de system_fl
   it('sin filas → todo CLOSED', async () => {
     queryImpl = async () => ({ rows: [] });
     const states = await getCircuitBreakerStates({});
-    expect(states).toEqual({ openai_breaker: false, tg_breaker: false });
+    expect(states).toEqual({ openai_breaker: false });
   });
 
   it('error de DB → fail-open (todo CLOSED, no revienta)', async () => {
     queryImpl = async () => { throw new Error('boom'); };
     const states = await getCircuitBreakerStates({});
-    expect(states).toEqual({ openai_breaker: false, tg_breaker: false });
+    expect(states).toEqual({ openai_breaker: false });
   });
 });
 
