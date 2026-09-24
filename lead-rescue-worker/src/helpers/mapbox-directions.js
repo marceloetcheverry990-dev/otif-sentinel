@@ -1,10 +1,64 @@
 /**
  * Directions para pintar o estimar (servidor). El token no sale al navegador.
- * overview=simplified reduce geometría para Leaflet sin trabar el hilo.
+ * Para pintar se pide overview=full y se simplifica acá con Douglas-Peucker:
+ * overview=simplified (y el muestreo por índice) cortaban las esquinas y la
+ * línea cruzaba manzanas al hacer zoom.
  */
 
 export const MAPBOX_MAX_WAYPOINTS = 25;
 const DEFAULT_TIMEOUT_MS = 6000;
+
+/**
+ * Douglas-Peucker sobre [lat, lng]: quita puntos redundantes sin sacar la línea
+ * de la calle (a diferencia de muestrear por índice). Proyección equirectangular
+ * local a metros — sobra para tramos urbanos.
+ * Si queda sobre maxPoints, duplica la tolerancia y reintenta.
+ */
+export function simplifyLatLngs(coords, { toleranceM = 3, maxPoints = 3000 } = {}) {
+  if (!Array.isArray(coords) || coords.length <= 2) return coords || [];
+  const lat0 = (Number(coords[0][0]) * Math.PI) / 180;
+  const kx = 111320 * Math.cos(lat0);
+  const ky = 110540;
+  const xs = coords.map((p) => Number(p[1]) * kx);
+  const ys = coords.map((p) => Number(p[0]) * ky);
+
+  const run = (tol) => {
+    const keep = new Uint8Array(coords.length);
+    keep[0] = 1;
+    keep[coords.length - 1] = 1;
+    const stack = [[0, coords.length - 1]];
+    const tol2 = tol * tol;
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      const dx = xs[b] - xs[a];
+      const dy = ys[b] - ys[a];
+      const len2 = dx * dx + dy * dy;
+      let maxD = -1;
+      let idx = -1;
+      for (let i = a + 1; i < b; i++) {
+        let t = len2 > 0 ? ((xs[i] - xs[a]) * dx + (ys[i] - ys[a]) * dy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const px = xs[a] + t * dx - xs[i];
+        const py = ys[a] + t * dy - ys[i];
+        const d2 = px * px + py * py;
+        if (d2 > maxD) { maxD = d2; idx = i; }
+      }
+      if (idx !== -1 && maxD > tol2) {
+        keep[idx] = 1;
+        stack.push([a, idx], [idx, b]);
+      }
+    }
+    return coords.filter((_, i) => keep[i]);
+  };
+
+  let tol = Math.max(0.5, Number(toleranceM) || 3);
+  let out = run(tol);
+  while (out.length > maxPoints && tol < 500) {
+    tol *= 2;
+    out = run(tol);
+  }
+  return out;
+}
 
 export function downsampleLatLngs(coords, maxPts = 400) {
   if (!Array.isArray(coords) || coords.length <= maxPts) return coords || [];
@@ -71,41 +125,67 @@ export async function fetchMapboxDrivingRoute(env, points, opts = {}) {
   const overview = opts.overview || 'simplified';
   const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
   const coordsString = clamped.map((c) => `${c.lng},${c.lat}`).join(';');
+  // Salida futura (ruteo nocturno para las 08:00): pedir el tráfico de esa hora,
+  // no el de ahora. Si Mapbox no acepta depart_at, se reintenta sin él.
+  const departAt = Number(opts.departAtMs) > Date.now() + 15 * 60 * 1000
+    ? new Date(Number(opts.departAtMs)).toISOString().replace(/\.\d{3}Z$/, 'Z')
+    : null;
   const profiles = ['mapbox/driving-traffic', 'mapbox/driving'];
   for (const profile of profiles) {
-    const url =
-      `https://api.mapbox.com/directions/v5/${profile}/${coordsString}` +
-      `?geometries=geojson&overview=${encodeURIComponent(overview)}&steps=false` +
-      `&access_token=${encodeURIComponent(token)}`;
-    const got = await fetchJsonRoute(url, timeoutMs);
-    if (got.route) return got.route;
+    for (const depart of departAt ? [departAt, null] : [null]) {
+      const url =
+        `https://api.mapbox.com/directions/v5/${profile}/${coordsString}` +
+        `?geometries=geojson&overview=${encodeURIComponent(overview)}&steps=false` +
+        (depart ? `&depart_at=${encodeURIComponent(depart)}` : '') +
+        `&access_token=${encodeURIComponent(token)}`;
+      const got = await fetchJsonRoute(url, timeoutMs);
+      if (got.route) return got.route;
+    }
   }
   return null;
 }
 
 /**
- * Geometría para pintar: Mapbox si hay token; si no, OSRM simplificado en el Worker
- * (nunca en el navegador, overview=simplified, ≤400 puntos).
+ * Mapbox acepta ≤25 waypoints por request. clampWaypoints muestreaba y la línea
+ * dejaba de pasar por algunas paradas: acá se parte en tramos que comparten el
+ * punto de unión y se concatenan.
+ */
+async function fetchMapboxGeometryChunked(env, raw, opts) {
+  if (raw.length <= MAPBOX_MAX_WAYPOINTS) return fetchMapboxDrivingRoute(env, raw, opts);
+  const coords = [];
+  for (let start = 0; start < raw.length - 1; start += MAPBOX_MAX_WAYPOINTS - 1) {
+    const chunk = raw.slice(start, start + MAPBOX_MAX_WAYPOINTS);
+    const route = await fetchMapboxDrivingRoute(env, chunk, opts);
+    const part = route?.geometry?.coordinates;
+    if (!part?.length) return null;
+    coords.push(...(coords.length ? part.slice(1) : part));
+  }
+  return { geometry: { type: 'LineString', coordinates: coords } };
+}
+
+/**
+ * Geometría para pintar: Mapbox si hay token; si no, OSRM en el Worker (nunca en
+ * el navegador). overview=full: el recorte de puntos lo hace simplifyLatLngs.
  */
 export async function fetchDrivingGeometry(env, points, opts = {}) {
   const token = env?.MAPBOX_TOKEN || env?.MAPBOX_ACCESS_TOKEN;
   const raw = usablePoints(points);
   if (raw.length < 2) return { route: null, provider: null, reason: 'too_few_points' };
-  const paintOpts = { overview: 'simplified', timeoutMs: opts.timeoutMs };
+  const paintOpts = { overview: 'full', timeoutMs: opts.timeoutMs };
 
   if (token) {
-    const route = await fetchMapboxDrivingRoute(env, raw, paintOpts);
+    const route = await fetchMapboxGeometryChunked(env, raw, paintOpts);
     if (route?.geometry?.coordinates?.length) {
       return { route, provider: 'mapbox', reason: 'ok' };
     }
   }
 
+  // OSRM acepta hasta 100 coordenadas (tope de /api/route-geometry): sin muestreo
   const osrmTimeout = Number.isFinite(opts.osrmTimeoutMs) ? opts.osrmTimeoutMs : 5000;
-  const clamped = clampWaypoints(raw);
-  const coordsString = clamped.map((c) => `${c.lng},${c.lat}`).join(';');
+  const coordsString = raw.map((c) => `${c.lng},${c.lat}`).join(';');
   const osrmUrl =
     `https://router.project-osrm.org/route/v1/driving/${coordsString}` +
-    `?overview=simplified&geometries=geojson&steps=false`;
+    `?overview=full&geometries=geojson&steps=false`;
   const osrm = await fetchJsonRoute(osrmUrl, osrmTimeout, {
     'User-Agent': 'OTIF-Sentinel/1.0',
   });

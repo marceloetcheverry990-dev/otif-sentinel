@@ -24,36 +24,6 @@ export const MAPA_FLOTA_SCRIPT = `
           }).join(';');
         }
 
-        function dist2LatLng(a, b) {
-          var dlat = Number(a[0]) - Number(b[0]);
-          var dlng = Number(a[1]) - Number(b[1]);
-          return dlat * dlat + dlng * dlng;
-        }
-
-        function splitSnappedRoundTrip(snapped, lastStop, depot) {
-          if (!Array.isArray(snapped) || snapped.length < 4 || !lastStop) {
-            return { outbound: snapped, ret: null };
-          }
-          var n = snapped.length;
-          var from = Math.max(1, Math.floor(n * 0.08));
-          var to = Math.max(from + 1, Math.floor(n * 0.92));
-          var bestI = from;
-          var best = Infinity;
-          for (var i = from; i < to; i++) {
-            var d = dist2LatLng(snapped[i], lastStop);
-            if (d < best) { best = d; bestI = i; }
-          }
-          if (depot && dist2LatLng(snapped[bestI], depot) < 1e-7) {
-            return { outbound: snapped, ret: null };
-          }
-          var outbound = snapped.slice(0, bestI + 1);
-          var ret = snapped.slice(bestI);
-          if (outbound.length < 2 || ret.length < 2) {
-            return { outbound: snapped, ret: null };
-          }
-          return { outbound: outbound, ret: ret };
-        }
-
         async function fetchSnappedRoute(latlngs, signal) {
           var key = routeGeomKey(latlngs);
           if (routeGeomCache.has(key)) return routeGeomCache.get(key);
@@ -108,7 +78,33 @@ export const MAPA_FLOTA_SCRIPT = `
           try {
             map = L.map('map', { preferCanvas: true, zoomControl: false }).setView([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG], 11);
             L.control.zoom({ position: 'topright' }).addTo(map);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
+            // CARTO sin API key servía tiles borrosas con "API KEY REQUIRED".
+            // El servidor decide: Mapbox vía Worker (URL firmada) u OSM.
+            var tilesCfg = (CONFIG && CONFIG.MAP_TILES) || {
+              url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              attribution: '&copy; OpenStreetMap',
+              maxZoom: 19,
+              maxNativeZoom: 19
+            };
+            var baseLayer = L.tileLayer(tilesCfg.url, {
+              attribution: tilesCfg.attribution,
+              maxZoom: tilesCfg.maxZoom || 19,
+              maxNativeZoom: tilesCfg.maxNativeZoom || tilesCfg.maxZoom || 19
+            }).addTo(map);
+            // La firma vence (24 h): si la Torre queda abierta, pedir una URL nueva
+            // en vez de dejar el mapa en gris.
+            var lastTileRefresh = 0;
+            baseLayer.on('tileerror', function() {
+              if (String(tilesCfg.url || '').indexOf('/api/map-tiles/') !== 0) return;
+              if (Date.now() - lastTileRefresh < 10 * 60 * 1000) return;
+              lastTileRefresh = Date.now();
+              fetch('/api/map-tiles/config', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(cfg) {
+                  if (cfg && cfg.url) { tilesCfg = cfg; baseLayer.setUrl(cfg.url); }
+                })
+                .catch(function() {});
+            });
 
             const bodegaIcon = L.divIcon({ html: '<div style="background:var(--accent); color:white; width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:18px; border:2px solid white; box-shadow:0 4px 6px rgba(0,0,0,0.2);">🏭</div>', className: '', iconSize: [36,36], iconAnchor: [18,18] });
             L.marker([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG], {icon: bodegaIcon}).bindPopup("<b>" + (CONFIG.BODEGA.NOMBRE || "Bodega") + "</b>").addTo(map);
@@ -283,23 +279,20 @@ export const MAPA_FLOTA_SCRIPT = `
                 return;
               }
 
-              let finalLat = Number(p.lat);
-              let finalLng = Number(p.lng);
-              
+              const finalLat = Number(p.lat);
+              const finalLng = Number(p.lng);
+
               if (isNaN(finalLat) || isNaN(finalLng)) {
                 console.warn("[DEFENSIVO] Parada de viaje omitida por coordenadas NaN:", p);
                 return;
               }
-              
-              const coordKey = finalLat.toFixed(4) + ',' + finalLng.toFixed(4);
-              
-              if (coordOcurrences[coordKey]) {
-                  coordOcurrences[coordKey]++;
-                  finalLat += (Math.random() - 0.5) * 0.002;
-                  finalLng += (Math.random() - 0.5) * 0.002;
-              } else {
-                  coordOcurrences[coordKey] = 1;
-              }
+
+              // La ruta va a la coordenada real. Paradas en el mismo punto se abren
+              // corriendo el ícono (antes se movía el punto al azar: la línea iba a un
+              // lugar inventado, distinto en cada redibujo, y el caché nunca pegaba).
+              const coordKey = finalLat.toFixed(5) + ',' + finalLng.toFixed(5);
+              const dupIdx = coordOcurrences[coordKey] || 0;
+              coordOcurrences[coordKey] = dupIdx + 1;
 
               coordsDirectas.push([finalLat, finalLng]);
               
@@ -310,8 +303,10 @@ export const MAPA_FLOTA_SCRIPT = `
               else if (p.estado_operacional === CONFIG.ESTADOS.RECHAZADO) hexColor = CONFIG.UI.COLORS.ALERTA; 
               else if (isLate) hexColor = CONFIG.UI.COLORS.WARNING; 
               
-              const pinHtml = '<div style="background:' + hexColor + '; color:white; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:2px solid white;">' + (index + 1) + '</div>';
-              const marker = L.marker([finalLat, finalLng], {icon: L.divIcon({ html: pinHtml, className: '', iconSize: [26,26], iconAnchor: [13,13] })}).bindPopup('<b>Stop ' + (index+1) + ': ' + escapeHTMLFront(p.cliente) + '</b>');
+              // Mismo número que el panel (stop_sequence), no el índice entre las que tienen coords
+              const seqLabel = escapeHTMLFront(String(p.stop_sequence != null && p.stop_sequence !== '' ? p.stop_sequence : index + 1));
+              const pinHtml = '<div style="background:' + hexColor + '; color:white; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:2px solid white;">' + seqLabel + '</div>';
+              const marker = L.marker([finalLat, finalLng], {icon: L.divIcon({ html: pinHtml, className: '', iconSize: [26,26], iconAnchor: [13 - dupIdx * 16, 13] })}).bindPopup('<b>Parada ' + seqLabel + ': ' + escapeHTMLFront(p.cliente) + '</b>');
               newLayers.push(marker);
             });
 
@@ -347,33 +342,36 @@ export const MAPA_FLOTA_SCRIPT = `
             await yieldToUI();
             if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
 
-            var tour = coordsDirectas.slice();
-            if (tour.length >= 1) {
-              var last = tour[tour.length - 1];
-              if (!last || last[0] !== CONFIG.BODEGA.LAT || last[1] !== CONFIG.BODEGA.LNG) {
-                tour.push([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
-              }
-            }
-            if (tour.length >= 2) {
-              var snapped = await fetchSnappedRoute(tour, signal);
+            // Ida (bodega → paradas) y vuelta (última → bodega) en requests separados.
+            // Antes se pedía el circuito entero y se partía adivinando el punto más
+            // cercano a la última parada: la ida y la vuelta quedaban mal cortadas.
+            var depotLL = [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG];
+            var hasDepot = Number.isFinite(depotLL[0]) && Number.isFinite(depotLL[1]);
+            var outboundPts = coordsDirectas.slice();
+            var returnPts = hasDepot && coordsDirectas.length > 1
+              ? [coordsDirectas[coordsDirectas.length - 1], depotLL]
+              : null;
+            if (outboundPts.length >= 2) {
+              var snappedParts = await Promise.all([
+                fetchSnappedRoute(outboundPts, signal),
+                returnPts ? fetchSnappedRoute(returnPts, signal) : Promise.resolve(null)
+              ]);
               if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
-              if (snapped && snapped.length > 1) {
-                try { if (outboundLine) layerViajeActivo.removeLayer(outboundLine); } catch (_) {}
+              var snappedOut = snappedParts[0];
+              var snappedRet = snappedParts[1];
+              if (snappedRet && snappedRet.length > 1) {
                 try { if (returnLine) layerViajeActivo.removeLayer(returnLine); } catch (_) {}
-                for (var li = newLayers.length - 1; li >= 0; li--) {
-                  if (newLayers[li] === outboundLine || newLayers[li] === returnLine) newLayers.splice(li, 1);
-                }
-                var lastStop = coordsDirectas[coordsDirectas.length - 1];
-                var depotLL = [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG];
-                var parts = splitSnappedRoundTrip(snapped, lastStop, depotLL);
-                outboundLine = L.polyline(parts.outbound, streetStyle);
+                if (newLayers.indexOf(returnLine) !== -1) newLayers.splice(newLayers.indexOf(returnLine), 1);
+                returnLine = L.polyline(snappedRet, returnStyle);
+                returnLine.addTo(layerViajeActivo);
+                newLayers.push(returnLine);
+              }
+              if (snappedOut && snappedOut.length > 1) {
+                try { if (outboundLine) layerViajeActivo.removeLayer(outboundLine); } catch (_) {}
+                if (newLayers.indexOf(outboundLine) !== -1) newLayers.splice(newLayers.indexOf(outboundLine), 1);
+                outboundLine = L.polyline(snappedOut, streetStyle);
                 outboundLine.addTo(layerViajeActivo);
                 newLayers.push(outboundLine);
-                if (parts.ret && parts.ret.length > 1) {
-                  returnLine = L.polyline(parts.ret, returnStyle);
-                  returnLine.addTo(layerViajeActivo);
-                  newLayers.push(returnLine);
-                }
                 window._snappedTrips[safeTripId] = true;
                 var snapBounds = L.featureGroup(newLayers).getBounds().extend([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
                 if (snapBounds.isValid()) {

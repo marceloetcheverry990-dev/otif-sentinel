@@ -83,6 +83,7 @@ import { handleChoferEvento } from './api/app-chofer-evento.js'; // MÃ¡quina d
 import { generatePublicRouteLink, getPublicRoute, getPublicRouteData } from './api/public-route.js'; // Portal pÃºblico
 import { createQuickRoute, updateQuickRouteStop, exportQuickRoutesCSV, updateQuickRouteAddress, cancelQuickRoute } from './api/quick-route.js'; // Ruta RÃ¡pida / EspontÃ¡nea
 import { handleGeocodeSuggest, handleGeocodeResolve } from './api/geocode.js'; // Geocoding con NÂ° de casa
+import { handleMapTile, getMapTileConfig } from './api/map-tiles.js'; // Mapa base (Mapbox vía Worker / OSM)
 import { handleEtaAccuracyStats } from './api/eta-accuracy.js'; // ETA Accuracy Metrics
 import { getOperationalDashboardData } from './api/dashboard-operational.js'; // Panel Operacional
 import { renderDashboardOperaciones } from './monitoring/dashboard-operaciones.js'; // Panel Operacional HTML
@@ -387,6 +388,16 @@ export default {
       if (token && rest.endsWith("/data")) return getPublicRouteData(request, env, token);
     }
     
+    // --- MAPA BASE (tiles firmadas; la firma viene embebida en la página) ---
+    if (request.method === "GET" && url.pathname === "/api/map-tiles/config") {
+      const access = await requireOperatorAccess(request, env);
+      if (!access.ok) return access.response;
+      return getMapTileConfig(request, env);
+    }
+    if (request.method === "GET" && url.pathname.startsWith("/api/map-tiles/")) {
+      return handleMapTile(request, env);
+    }
+
     // --- RUTAS GPS (Live Tracking) ---
     if (request.method === "POST" && url.pathname === "/api/admin/config-gps") {
       return runOperatorMutation(request, env, ctx, 'gps.config', (req, e, op) =>

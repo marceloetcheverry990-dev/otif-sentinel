@@ -64,16 +64,17 @@ describe('getRouteGeometry', () => {
     expect(body.coordinates.at(-1)).toEqual([-33.5, -70.7]);
   });
 
-  it('sin token pinta con OSRM simplificado', async () => {
+  it('sin token pinta con OSRM (geometría completa, se simplifica en el Worker)', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url) => {
       expect(String(url)).toContain('project-osrm');
-      expect(String(url)).toContain('overview=simplified');
+      expect(String(url)).toContain('overview=full');
       return {
         ok: true,
         json: async () => ({
           code: 'Ok',
           routes: [{
-            geometry: { coordinates: [[-70.6, -33.4], [-70.62, -33.42], [-70.7, -33.5]] },
+            // punto medio fuera de la recta (una esquina): Douglas-Peucker lo conserva
+            geometry: { coordinates: [[-70.6, -33.4], [-70.62, -33.46], [-70.7, -33.5]] },
           }],
         }),
       };

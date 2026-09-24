@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 import { CORS_HEADERS, requireTenantId } from '../config.js';
 import { withDb } from '../db.js';
 import { renderPublicRouteHTML } from '../public-route-ui.js';
+import { buildMapTileConfig } from './map-tiles.js';
 import {
   buildClientesMap,
   normalizeClienteKey,
@@ -260,7 +261,7 @@ export async function getPublicRoute(request, env, token, ctx = null) {
     console.log('[PUBLIC ROUTE] Paradas con coords:', paradasPublicas.filter(p => p.lat && p.lng).length);
 
     // Renderizar HTML público
-    const html = renderPublicRouteHTML(link.trip_id, paradasPublicas, token);
+    const html = renderPublicRouteHTML(link.trip_id, paradasPublicas, token, await buildMapTileConfig(env));
 
     return new Response(html, {
       status: 200,

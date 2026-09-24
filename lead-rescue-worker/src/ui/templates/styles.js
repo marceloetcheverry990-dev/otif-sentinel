@@ -200,6 +200,8 @@ export const DASHBOARD_STYLES = `
           font-weight: 700;
           color: #64748b;
         }
+        .header-check { cursor: pointer; padding: 0.3rem 0.5rem; }
+        .header-check input { margin: 0; accent-color: var(--primary); cursor: pointer; }
         .header-trucks {
           width: 2.6rem;
           min-width: 2.6rem;
@@ -405,6 +407,16 @@ export const DASHBOARD_STYLES = `
         /* MAP AREA */
         .map-container { flex: 1; position: relative; background: #e2e8f0; }
         #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+        /* Pantallas angostas: el sidebar (min 450px) dejaba el mapa en 0px de ancho.
+           Se apilan: lista con scroll propio arriba, mapa abajo. */
+        @media (max-width: 900px) {
+          body { height: auto; min-height: 100vh; overflow: auto; }
+          .app-container { flex-direction: column; overflow: visible; }
+          .sidebar { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--border); }
+          .list-viewport { max-height: 60vh; }
+          .map-container { flex: none; height: 70vh; min-height: 320px; }
+        }
 
         /* --- LEAD RESCUE / DEAD MAN BANNER --- */
         .lead-rescue-banner {
