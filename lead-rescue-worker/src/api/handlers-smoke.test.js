@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getChoferRutas } from './app-chofer-rutas.js';
 import { handleGPSPing } from './gps.js';
 import { signDriverToken } from '../helpers/driver-auth.js';
+import { createFakePgTx } from '../test-utils/fake-pg-tx.js';
 
 // ─── Env de test con JWT_SECRET ───────────────────────────────────────────────
 // JWT_SECRET requerido por verifyDriverToken en todos los handlers post-Wave 3.
@@ -262,7 +263,9 @@ describe('handleGPSPing - smoke tests post-refactor', () => {
     expect(response.status).toBe(405);
   });
 
-  it('devuelve 403 cuando falta tenant_id (requireTenantId sigue siendo el primer check tras el parse)', async () => {
+  // A3: auth va antes que el chequeo de tenant (no filtrar tenant_id con 403 pre-auth).
+  // El tenant sale del token; sin token → 401.
+  it('devuelve 401 sin token, aunque falte tenant_id en el body', async () => {
     const request = makePostRequest('/api/gps/ping', {
       trip_id: 'VIAJE-001',
       lat: -33.43,
@@ -270,7 +273,20 @@ describe('handleGPSPing - smoke tests post-refactor', () => {
       // tenant_id ausente
     });
     const response = await handleGPSPing(request, TEST_ENV);
+    expect(response.status).toBe(401);
+  });
+
+  it('devuelve 403 tenant_mismatch si el body trae otro tenant que el del token', async () => {
+    const token = await makeValidToken();
+    const request = makePostRequest('/api/gps/ping', {
+      trip_id: 'VIAJE-001',
+      tenant_id: 'otro_tenant',
+      lat: -33.43,
+      lng: -70.61,
+    }, token);
+    const response = await handleGPSPing(request, TEST_ENV);
     expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe('tenant_mismatch');
   });
 
   it('devuelve 400 cuando faltan campos obligatorios del payload', async () => {
@@ -316,11 +332,12 @@ describe('handleGPSPing - smoke tests post-refactor', () => {
 
   it('devuelve 404 cuando el viaje no existe en flota_vehiculos', async () => {
     const token = await makeValidToken();
-    pgClientMock.query = vi.fn()
-      // Primera query: autoría — el viaje SÍ está asignado al chofer
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] })
-      // Segunda query: SELECT de flota_vehiculos — viaje no encontrado
-      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    pgClientMock = createFakePgTx([
+      // autoría — el viaje SÍ está asignado al chofer
+      [/rut_chofer_asignado/, { rowCount: 1, rows: [{}] }],
+      // SELECT de flota_vehiculos — viaje no encontrado
+      [/SELECT ultima_lat/, { rowCount: 0, rows: [] }],
+    ]).client;
 
     const request = makePostRequest('/api/gps/ping', {
       trip_id: 'VIAJE-INEXISTENTE',
@@ -334,11 +351,11 @@ describe('handleGPSPing - smoke tests post-refactor', () => {
 
   it('camino feliz: devuelve 200 con km_actuales cuando el ping es valido', async () => {
     const token = await makeValidToken();
-    pgClientMock.query = vi.fn()
-      // Primera query: autoría — viaje asignado al chofer del token
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] })
-      // Segunda query: SELECT de flota_vehiculos — posicion previa
-      .mockResolvedValueOnce({
+    const fake = createFakePgTx([
+      // autoría — viaje asignado al chofer del token
+      [/rut_chofer_asignado/, { rowCount: 1, rows: [{}] }],
+      // SELECT de flota_vehiculos — posicion previa
+      [/SELECT ultima_lat/, {
         rowCount: 1,
         rows: [{
           ultima_lat: '-33.420',
@@ -346,11 +363,11 @@ describe('handleGPSPing - smoke tests post-refactor', () => {
           km_recorridos_reales: '10.5',
           ultima_actualizacion: new Date(Date.now() - 60000).toISOString(), // hace 1 min
         }],
-      })
-      // Tercera query: UPDATE flota_vehiculos
-      .mockResolvedValueOnce({ rowCount: 1 })
-      // Cuarta query: UPDATE trip_metrics
-      .mockResolvedValueOnce({ rowCount: 1 });
+      }],
+      [/^UPDATE flota_vehiculos/, { rowCount: 1 }],
+      [/^UPDATE trip_metrics/, { rowCount: 1 }],
+    ]);
+    pgClientMock = fake.client;
 
     const request = makePostRequest('/api/gps/ping', {
       trip_id: 'VIAJE-001',
@@ -364,7 +381,10 @@ describe('handleGPSPing - smoke tests post-refactor', () => {
     expect(body.exito).toBe(true);
     // km_actuales debe ser mayor que el valor inicial (10.5)
     expect(body.km_actuales).toBeGreaterThan(10.5);
-    // Verificar que se ejecutaron las 4 queries (autoría + SELECT + 2 UPDATEs)
-    expect(pgClientMock.query).toHaveBeenCalledTimes(4);
+    // Posición y KPI actualizados, y la TX termina sana (el COMMIT persiste).
+    // No contamos queries totales: trail, geocerca y aviso ETA agregan las suyas.
+    expect(fake.callsMatching(/^UPDATE flota_vehiculos/)).toHaveLength(1);
+    expect(fake.callsMatching(/^UPDATE trip_metrics/)).toHaveLength(1);
+    expect(fake.state.aborted).toBe(false);
   });
 });

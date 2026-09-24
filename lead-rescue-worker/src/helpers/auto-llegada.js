@@ -6,6 +6,7 @@
 
 import { CONFIG } from '../config.js';
 import { resolveDestinoCoords } from './destino-coords.js';
+import { withSavepoint } from './pg-savepoint.js';
 
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -106,8 +107,10 @@ export async function maybeAutoLlegada(client, {
     return { triggered: false, reason: 'race_already_set', ot_id: orden.ot_id };
   }
 
+  // Bitácora best-effort: en SAVEPOINT para que un fallo no deshaga el EN_SITIO
+  // (corremos dentro de la TX del ping GPS).
   try {
-    await client.query(
+    await withSavepoint(client, 'sp_geo_bit', () => client.query(
       `INSERT INTO bitacora_viajes
          (tenant_id, trip_id, stop_id, tipo_evento, latitud, longitud, mensaje, created_at)
        VALUES ($1, $2, $3, 'LLEGADA', $4, $5, $6, $7::timestamptz)`,
@@ -120,18 +123,18 @@ export async function maybeAutoLlegada(client, {
         `auto_geofence dist_m=${Math.round(distM)} radius_m=${radius}`,
         ts,
       ]
-    );
+    ));
   } catch (bitErr) {
     // columnas mensaje opcionales / schema viejo
     if (bitErr.code !== '42703') {
       console.warn('[AUTO_LLEGADA_BITACORA]', bitErr.message);
     } else {
-      await client.query(
+      await withSavepoint(client, 'sp_geo_bit2', () => client.query(
         `INSERT INTO bitacora_viajes
            (tenant_id, trip_id, stop_id, tipo_evento, latitud, longitud, created_at)
          VALUES ($1, $2, $3, 'LLEGADA', $4, $5, $6::timestamptz)`,
         [tenant_id, trip_id, orden.ot_id, lat, lng, ts]
-      ).catch((e) => console.warn('[AUTO_LLEGADA_BITACORA]', e.message));
+      )).catch((e) => console.warn('[AUTO_LLEGADA_BITACORA]', e.message));
     }
   }
 
