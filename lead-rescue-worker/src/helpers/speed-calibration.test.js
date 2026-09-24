@@ -3,6 +3,7 @@ import {
   speedSampleFromMetric,
   speedFromBiasMin,
   applyClimaToSpeed,
+  climaDurationFactor,
   median,
   clampSpeedKmh,
   _clearSpeedCache,
@@ -80,5 +81,16 @@ describe('lookupEffectiveSpeedKmh', () => {
     });
     expect(r.source).toBe('tenant');
     expect(r.velocidadKmH).toBeLessThan(30);
+  });
+});
+
+describe('climaDurationFactor', () => {
+  it('alarga tiempos externos (Mapbox) en la misma proporción en que baja la velocidad', () => {
+    expect(climaDurationFactor('NORMAL')).toBe(1);
+    expect(climaDurationFactor('lluvia')).toBeCloseTo(1.4, 5);
+    expect(climaDurationFactor('NIEBLA')).toBeCloseTo(35 / 15, 5);
+    expect(climaDurationFactor(undefined)).toBe(1);
+    // Consistente con applyClimaToSpeed: tiempo × factor = distancia / velocidad con clima
+    expect(applyClimaToSpeed(35, 'LLUVIA') * climaDurationFactor('LLUVIA')).toBeCloseTo(35, 5);
   });
 });

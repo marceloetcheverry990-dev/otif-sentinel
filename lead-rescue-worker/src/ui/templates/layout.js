@@ -81,6 +81,10 @@ export const renderLayout = ({
               <span class="header-trucks-label">N°</span>
               <input type="number" id="camionesDisponibles" class="input-base header-trucks" value="3" min="1" max="50" step="1">
             </label>
+            <label class="header-trucks-wrap header-check" title="Marcado: usa los N camiones, repartidos parejo. Sin marcar: usa solo los que hagan falta (hasta N).">
+              <input type="checkbox" id="usarTodosCamiones">
+              <span class="header-trucks-label">Usar todos</span>
+            </label>
             <button type="button" id="btnOptimize" class="btn-primary btn-compact" title="El ruteo se calcula en Cloudflare Workers (servidor). El navegador no corre el VRP.">Rutear</button>
             <button type="button" id="btnRecalcularRuteo" class="btn btn-compact" title="Elegí qué rutas ya armadas (todavía no salieron) recalcular con el perfil, N° de camiones y clima.">Recalcular</button>
             <button type="button" id="btnReoptMidday" class="btn btn-compact" title="Inserta pedidos nuevos en rutas ya activas sin romper entregas en curso">Re-opt</button>

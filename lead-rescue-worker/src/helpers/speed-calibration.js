@@ -61,18 +61,27 @@ export function speedFromBiasMin(biasMin, {
   return clampSpeedKmh(Number(v0) * (t0 / actual));
 }
 
+/** Velocidad relativa por clima (base histórica 35 → 25 lluvia / 15 niebla). */
+const CLIMA_SPEED_FACTOR = { LLUVIA: 25 / 35, NIEBLA: 15 / 35 };
+
+function climaSpeedFactor(clima) {
+  return CLIMA_SPEED_FACTOR[String(clima || 'NORMAL').toUpperCase()] || 1;
+}
+
 /** Aplica factor clima relativo a la base histórica 35→25/15. */
 export function applyClimaToSpeed(velocidadKmH, clima = 'NORMAL') {
   const v = Number(velocidadKmH);
   const base = Number.isFinite(v) ? v : V0_DEFAULT();
-  switch (String(clima || 'NORMAL').toUpperCase()) {
-    case 'LLUVIA':
-      return clampSpeedKmh(base * (25 / 35));
-    case 'NIEBLA':
-      return clampSpeedKmh(base * (15 / 35));
-    default:
-      return clampSpeedKmh(base);
-  }
+  return clampSpeedKmh(base * climaSpeedFactor(clima));
+}
+
+/**
+ * Multiplicador para tiempos de manejo que no salen de nuestra velocidad
+ * (Mapbox): con lluvia/niebla el viaje dura más en la misma proporción en que
+ * baja la velocidad. Sin esto, en producción el clima no cambiaba las ETA.
+ */
+export function climaDurationFactor(clima = 'NORMAL') {
+  return 1 / climaSpeedFactor(clima);
 }
 
 function hourFromIso(iso) {

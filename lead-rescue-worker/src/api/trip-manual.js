@@ -1,14 +1,17 @@
 /**
  * Override manual del dispatcher: reordenar paradas y mover OT entre viajes.
  */
-import { CORS_HEADERS, jsonResponse, requireTenantId } from '../config.js';
+import { CONFIG, jsonResponse, requireTenantId } from '../config.js';
 import { withDbTransaction } from '../db.js';
 import {
   fitsCapacity,
+  hasFood,
+  hasHazmat,
   normalizeTags,
   tagsConflict,
   unionTags,
 } from '../helpers/cargo-constraints.js';
+import { resolveDepot, depotToSolver } from '../helpers/depots.js';
 import { ensureGuiaForLateOt } from '../helpers/dte/ensure-guia-late-ot.js';
 import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 import {
@@ -20,6 +23,52 @@ import { routeFeasibleTw } from '../helpers/vrp-solver.js';
 
 function parseTags(raw) {
   return normalizeTags(raw);
+}
+
+// Fuera de la ruta: no cuentan como paradas ni reciben stop_sequence.
+// La Torre tampoco las manda en ot_ids al reordenar.
+const OFF_ROUTE_STATES = new Set(['CANCELADO_PLANILLA', 'RETORNO_BODEGA']);
+
+function isOffRoute(s) {
+  return OFF_ROUTE_STATES.has(String(s?.estado_operacional || '').toUpperCase());
+}
+
+/**
+ * Desde dónde simular ventanas horarias: si el viaje ya salió, GPS del camión
+ * o última parada congelada; si no, la bodega del tenant.
+ */
+async function resolveTwOrigin(client, env, tenantId, tripId, frozen, open) {
+  const started = frozen.length > 0
+    || open.some((s) => String(s.estado_operacional || '').toUpperCase() === 'EN_RUTA');
+  if (started) {
+    try {
+      await client.query('SAVEPOINT sp_tw_gps');
+      const r = await client.query(
+        `SELECT ultima_lat, ultima_lng FROM flota_vehiculos
+         WHERE tenant_id = $1 AND trip_id_actual = $2
+         LIMIT 1`,
+        [tenantId, tripId]
+      );
+      await client.query('RELEASE SAVEPOINT sp_tw_gps');
+      const lat = Number(r.rows[0]?.ultima_lat);
+      const lng = Number(r.rows[0]?.ultima_lng);
+      if (r.rows[0]?.ultima_lat != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+        return { lat, lng };
+      }
+    } catch (_) {
+      try { await client.query('ROLLBACK TO SAVEPOINT sp_tw_gps'); } catch (__) { /* ignore */ }
+    }
+    const last = [...frozen].reverse().find((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+    if (last) return { lat: last.lat, lng: last.lng };
+  }
+  return depotToSolver(await resolveDepot(env, tenantId, null));
+}
+
+async function openRouteFeasibleTw(client, env, tenantId, tripId, frozen, open) {
+  const geoOpen = open.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+  if (geoOpen.length !== open.length) return true; // sin coords completas no se puede simular
+  const origin = await resolveTwOrigin(client, env, tenantId, tripId, frozen, open);
+  return routeFeasibleTw(geoOpen, Date.now(), CONFIG.VELOCIDAD_FALLBACK_KMH || 35, origin).ok;
 }
 
 async function loadTripStops(client, tenantId, tripId) {
@@ -54,7 +103,7 @@ async function loadTripStops(client, tenantId, tripId) {
   }
   if (!rows) throw lastErr || new Error('loadTripStops failed');
 
-  return rows.map((o) => {
+  return rows.filter((o) => !isOffRoute(o)).map((o) => {
     let meta = o.metadata;
     if (typeof meta === 'string') {
       try { meta = JSON.parse(meta); } catch { meta = {}; }
@@ -170,24 +219,16 @@ export async function reorderTripStops(request, env, operator = null) {
       const choferId = open[0]?.chofer_asignado_id || frozen[0]?.chofer_asignado_id;
       const cap = await loadChoferCapacity(client, tenant_id, choferId);
       const all = [...frozen, ...newOpen];
-      if (tagsConflict([], unionTags(all))) {
-        /* unionTags already mixed */
+      const allTags = unionTags(all);
+      if (hasHazmat(allTags) && hasFood(allTags)) {
+        return jsonResponse({ error: 'Segregación HAZMAT/FOOD violada', code: 'segregation' }, 400);
       }
-      const hazFood = (() => {
-        const t = unionTags(all);
-        const haz = t.some((x) => ['HAZMAT', 'ADR', 'PELGEROSO'].includes(x));
-        const food = t.some((x) => ['FOOD', 'ALIMENTO', 'ALIMENTOS', 'FRIO_ALIMENTO'].includes(x));
-        return haz && food;
-      })();
-      if (hazFood) return jsonResponse({ error: 'Segregación HAZMAT/FOOD violada', code: 'segregation' }, 400);
 
       const fit = fitsCapacity(all, cap.capacidad_volumen, cap.capacidad_peso);
       if (!fit.ok) return jsonResponse({ error: 'Capacidad excedida', code: fit.reason }, 400);
 
-      const geoOpen = newOpen.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-      if (geoOpen.length === newOpen.length) {
-        const tw = routeFeasibleTw(geoOpen, Date.now(), 35);
-        if (!tw.ok) return jsonResponse({ error: 'Orden viola ventanas de tiempo', code: 'tw_infeasible' }, 400);
+      if (!(await openRouteFeasibleTw(client, env, tenant_id, trip_id, frozen, newOpen))) {
+        return jsonResponse({ error: 'Orden viola ventanas de tiempo', code: 'tw_infeasible' }, 400);
       }
 
       const sequenced = rebuildSequences(frozen, newOpen);
@@ -270,6 +311,9 @@ export async function moveTripStop(request, env, operator = null, ctx = null) {
       if (FROZEN_STATES.has(st) || st === 'ENTREGADO') {
         return jsonResponse({ error: 'No se puede mover una parada congelada/entregada', code: 'frozen' }, 400);
       }
+      if (isOffRoute(moving)) {
+        return jsonResponse({ error: 'No se puede mover una parada cancelada o devuelta a bodega', code: 'off_route' }, 400);
+      }
 
       const sourceStops = await loadTripStops(client, tenant_id, from_trip_id);
       const destStops = await loadTripStops(client, tenant_id, to_trip_id);
@@ -314,10 +358,8 @@ export async function moveTripStop(request, env, operator = null, ctx = null) {
       let idx = Number.isFinite(insert_at) ? Math.max(0, Math.min(insert_at, newOpen.length)) : newOpen.length;
       newOpen.splice(idx, 0, movingNorm);
 
-      const geoOpen = newOpen.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-      if (geoOpen.length === newOpen.length) {
-        const tw = routeFeasibleTw(geoOpen, Date.now(), 35);
-        if (!tw.ok) return jsonResponse({ error: 'Inserción viola ventanas de tiempo', code: 'tw_infeasible' }, 400);
+      if (!(await openRouteFeasibleTw(client, env, tenant_id, to_trip_id, dstSplit.frozen, newOpen))) {
+        return jsonResponse({ error: 'Inserción viola ventanas de tiempo', code: 'tw_infeasible' }, 400);
       }
 
       const destSeq = rebuildSequences(dstSplit.frozen, newOpen);
