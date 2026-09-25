@@ -393,7 +393,7 @@ export const ERP_CLIENTE_SCRIPT = `
           '<div class="erp-menu-titulo">📂 Menú SAP</div>' + arbolMenu() +
         '</nav>' +
         '<section class="erp-bienvenida">' +
-          '<h2>Bienvenido al ERP — módulo MM (Gestión de materiales)</h2>' +
+          '<h2>Bienvenido al ERP — módulos MM (materiales) y PP (producción)</h2>' +
           '<p>Escribe un código de transacción en el campo de comandos de arriba (por ejemplo <b>ME21N</b>) y presiona <kbd>Enter</kbd>, o haz clic en el menú de la izquierda.</p>' +
           '<h3>Circuito de compras (hazlo en este orden la primera vez)</h3>' +
           '<ol class="erp-pasos">' +
@@ -403,6 +403,15 @@ export const ERP_CLIENTE_SCRIPT = `
             '<li><a href="#" data-tx="MIGO">MIGO</a> Cuando llega el camión: entrada de mercancías, clase 101. <b>Aquí sube el stock</b>.</li>' +
             '<li><a href="#" data-tx="MMBE">MMBE</a> Ver el stock: libre, reservado por la Torre y en pedido.</li>' +
             '<li><a href="#" data-tx="MB51">MB51</a> Ver todos los movimientos, incluidos los despachos de la Torre (601).</li>' +
+          '</ol>' +
+          '<h3>Circuito de producción</h3>' +
+          '<ol class="erp-pasos">' +
+            '<li><a href="#" data-tx="CS01">CS01</a> Crear la receta (lista de materiales) del producto terminado (FERT) o semielaborado (HALB).</li>' +
+            '<li><a href="#" data-tx="CO01">CO01</a> Crear la orden de producción. <b>Verificar</b> muestra qué insumos faltan.</li>' +
+            '<li><a href="#" data-tx="CO02">CO02</a> Liberar la orden: <b>aparta los insumos</b> para que la Torre no los venda.</li>' +
+            '<li><a href="#" data-tx="MIGO">MIGO</a> Salida + Orden (261) para entregar insumos a producción; Entrada + Orden (101) para lo fabricado. Los insumos con descuento automático bajan solos.</li>' +
+            '<li><a href="#" data-tx="CO02">CO02</a> Cierre técnico (TECO) cuando no se fabrica más: lo apartado que sobró vuelve a libre.</li>' +
+            '<li><a href="#" data-tx="COOIS">COOIS</a> Ver todas las órdenes y su avance.</li>' +
           '</ol>' +
           '<h3>Teclas como en SAP</h3>' +
           '<ul class="erp-teclas">' +

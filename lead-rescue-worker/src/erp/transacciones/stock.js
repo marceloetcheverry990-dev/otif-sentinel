@@ -1,5 +1,6 @@
 // src/erp/transacciones/stock.js
-// MMBE — Resumen de stocks (libre utilización, reservado por la Torre, en pedido de compra).
+// MMBE — Resumen de stocks (libre utilización, reservado por la Torre y por producción,
+//        en pedido de compra y en fabricación).
 // MB51 — Lista de documentos de material: los del ERP (MIGO) y los que genera la
 //        Torre (alta de producto = 561, despacho/packing = 601, ajustes = 701/702).
 
@@ -27,12 +28,15 @@ export const MMBE = {
     const r = await client.query(
       `SELECT i.sku, p.nombre, p.unidad, i.depot_id AS centro, d.nombre AS nombre_centro,
               i.qty_disponible AS libre_utilizacion, i.qty_reservada AS reservado,
+              i.qty_reservada_produccion AS reservado_produccion,
               COALESCE(oc.en_pedido, 0) AS en_pedido,
-              i.qty_disponible + i.qty_reservada AS stock_total,
+              COALESCE(op.en_fabricacion, 0) AS en_fabricacion,
+              i.qty_disponible + i.qty_reservada + i.qty_reservada_produccion AS stock_total,
               i.qty_minima AS punto_pedido, i.ubicacion,
               COALESCE(qb.demanda, 0) AS demanda_quiebre,
               (i.qty_disponible < i.qty_minima OR COALESCE(qb.demanda, 0) > 0) AS bajo_minimo,
-              ROUND((i.qty_disponible + i.qty_reservada) * COALESCE(p.precio_estandar, 0), 2) AS valor
+              p.tipo_material,
+              ROUND((i.qty_disponible + i.qty_reservada + i.qty_reservada_produccion) * COALESCE(p.precio_estandar, 0), 2) AS valor
        FROM inventario_bodega i
        LEFT JOIN productos p ON p.tenant_id = i.tenant_id AND p.sku = i.sku
        LEFT JOIN depots d ON d.tenant_id = i.tenant_id AND d.depot_id = i.depot_id
@@ -40,6 +44,12 @@ export const MMBE = {
          SELECT centro, sku, SUM(GREATEST(cantidad - cantidad_recibida, 0)) AS en_pedido
          FROM erp_pedidos_compra_pos WHERE tenant_id = $1 AND NOT borrado GROUP BY centro, sku
        ) oc ON oc.centro = i.depot_id AND oc.sku = i.sku
+       LEFT JOIN (
+         SELECT centro, sku, SUM(GREATEST(cantidad - cantidad_entregada, 0)) AS en_fabricacion
+         FROM erp_ordenes_produccion
+         WHERE tenant_id = $1 AND estado IN ('CRTD', 'REL', 'PDLV') AND NOT entrega_final
+         GROUP BY centro, sku
+       ) op ON op.centro = i.depot_id AND op.sku = i.sku
        LEFT JOIN (
          SELECT q.depot_id, q.sku, SUM(q.qty) AS demanda
          FROM orden_lineas_quiebre q
@@ -70,17 +80,23 @@ export const MMBE = {
         { id: 'centro', etiqueta: 'Centro' },
         { id: 'libre_utilizacion', etiqueta: 'Libre utilización', tipo: 'qty' },
         { id: 'reservado', etiqueta: 'Reservado (Torre)', tipo: 'qty' },
+        { id: 'reservado_produccion', etiqueta: 'Reservado producción', tipo: 'qty' },
         { id: 'en_pedido', etiqueta: 'En pedido', tipo: 'qty' },
+        { id: 'en_fabricacion', etiqueta: 'En fabricación', tipo: 'qty' },
         { id: 'demanda_quiebre', etiqueta: 'Demanda en quiebre', tipo: 'qty' },
         { id: 'stock_total', etiqueta: 'Stock total', tipo: 'qty' },
         { id: 'unidad', etiqueta: 'UMB' },
         { id: 'punto_pedido', etiqueta: 'Punto pedido', tipo: 'qty' },
         { id: 'valor', etiqueta: 'Valor (CLP)', tipo: 'money' },
-        { id: 'bajo_minimo', etiqueta: '', tipo: 'accion', texto: 'Pedir', mostrar: function (f) { return f.bajo_minimo; },
+        { id: 'bajo_minimo', etiqueta: '', tipo: 'accion', mostrar: function (f) { return f.bajo_minimo; },
+          texto: 'Reponer',
           enlace: function (f) {
-            // Cubrir lo que esperan los pedidos en quiebre y reponer hasta 2× el punto de pedido.
-            var falta = Math.max(Number(f.punto_pedido) * 2 + Number(f.demanda_quiebre) - Number(f.libre_utilizacion) - Number(f.en_pedido), 1);
-            ui.ir('ME21N', { material: f.sku, centro: f.centro, cantidad: falta });
+            // Cubrir lo que esperan los pedidos en quiebre y reponer hasta 2× el punto de pedido,
+            // descontando lo que ya viene (compras y órdenes de producción abiertas).
+            var falta = Math.max(Number(f.punto_pedido) * 2 + Number(f.demanda_quiebre) - Number(f.libre_utilizacion) - Number(f.en_pedido) - Number(f.en_fabricacion), 1);
+            // Lo que se fabrica se repone con una orden de producción; lo demás, con un pedido de compra.
+            if (f.tipo_material === 'FERT' || f.tipo_material === 'HALB') ui.ir('CO01', { material: f.sku, centro: f.centro, cantidad: falta });
+            else ui.ir('ME21N', { material: f.sku, centro: f.centro, cantidad: falta });
           } },
       ], data.stocks, { resaltar: function (f) { return f.bajo_minimo; } });
       ui.mensaje(bajos ? 'W' : 'S', data.stocks.length + ' línea(s) de stock' + (bajos ? ' — ' + bajos + ' requieren reposición (bajo punto de pedido o con pedidos en quiebre)' : ''));
@@ -110,6 +126,7 @@ export const MB51 = {
     if (params.centro) add('x.centro = ?', String(params.centro).slice(0, 64));
     if (params.clase_movimiento) add('x.clase_movimiento = ?', String(params.clase_movimiento).slice(0, 3));
     if (params.documento) add('x.documento = ?', String(params.documento).slice(0, 20));
+    if (params.orden) add('x.orden = ?', String(params.orden).slice(0, 12));
     if (params.desde) add('x.fecha >= ?::date', String(params.desde).slice(0, 10));
     if (params.hasta) add('x.fecha <= ?::date', String(params.hasta).slice(0, 10));
     // Documentos ERP (MSEG) + movimientos de la Torre sin documento (las reservas
@@ -117,7 +134,7 @@ export const MB51 = {
     const r = await client.query(
       `SELECT x.* FROM (
          SELECT d.mblnr AS documento, d.zeile AS linea, d.clase_movimiento, d.sku, d.centro,
-                d.cantidad, d.unidad, d.importe, d.ebeln AS referencia,
+                d.cantidad, d.unidad, d.importe, COALESCE(d.ebeln, d.aufnr) AS referencia, d.aufnr AS orden,
                 m.fecha_contabilizacion AS fecha, m.created_at, m.created_by AS usuario, 'ERP' AS origen
          FROM erp_documentos_material_pos d
          JOIN erp_documentos_material m ON m.tenant_id = d.tenant_id AND m.mblnr = d.mblnr
@@ -125,7 +142,7 @@ export const MB51 = {
          UNION ALL
          SELECT 'T' || m.id::text AS documento, 1 AS linea, ${CLASE_DESDE_TORRE_SQL} AS clase_movimiento,
                 m.sku, m.depot_id AS centro, ABS(m.qty) AS cantidad, COALESCE(p.unidad, 'UN') AS unidad,
-                ROUND(ABS(m.qty) * COALESCE(p.precio_estandar, 0), 2) AS importe, m.ot_id AS referencia,
+                ROUND(ABS(m.qty) * COALESCE(p.precio_estandar, 0), 2) AS importe, m.ot_id AS referencia, NULL AS orden,
                 m.created_at::date AS fecha, m.created_at, 'Torre' AS usuario, 'TORRE' AS origen
          FROM movimientos_inventario m
          LEFT JOIN productos p ON p.tenant_id = m.tenant_id AND p.sku = m.sku
@@ -167,7 +184,10 @@ export const MB51 = {
         { id: 'cantidad_signo', etiqueta: 'Cantidad', tipo: 'qty' },
         { id: 'unidad', etiqueta: 'UM' },
         { id: 'importe', etiqueta: 'Importe', tipo: 'money' },
-        { id: 'referencia', etiqueta: 'Referencia' },
+        { id: 'referencia', etiqueta: 'Referencia', enlace: function (f) {
+          if (f.orden) ui.ir('CO03', { orden: f.orden });
+          else if (f.origen === 'ERP' && f.referencia) ui.ir('ME23N', { pedido: f.referencia });
+        } },
         { id: 'fecha', etiqueta: 'Fe. contab.', tipo: 'date' },
         { id: 'usuario', etiqueta: 'Usuario' },
       ], data.documentos);

@@ -199,7 +199,7 @@ export function renderErpPage(operator) {
 <main id="erp-contenido" tabindex="-1"></main>
 <footer class="erp-barra-estado" id="erp-barra-estado" role="status" aria-live="polite">
   <span id="erp-estado-icono"></span><span id="erp-estado"></span>
-  <span class="erp-sistema"><span id="erp-tx-actual">ERP</span> · MM · ${escapeHtml(operator?.tenant_id || '')}</span>
+  <span class="erp-sistema"><span id="erp-tx-actual">ERP</span> · MM · PP ·${escapeHtml(operator?.tenant_id || '')}</span>
 </footer>
 <div class="erp-f4-modal" id="erp-f4" hidden>
   <div class="erp-f4-caja" role="dialog" aria-modal="true" aria-labelledby="erp-f4-titulo">

@@ -11,6 +11,9 @@
 //   MKPF       | erp_documentos_material       | Cabecera de documento de material
 //   MSEG       | erp_documentos_material_pos   | Posiciones del documento de material
 //   NRIV       | erp_numeradores               | Rangos de números (4500000000, 5000000000...)
+//   STKO/STPO  | erp_listas_materiales(_pos)   | Lista de materiales (receta) y sus componentes
+//   AUFK/AFKO  | erp_ordenes_produccion        | Orden de producción
+//   RESB       | erp_ordenes_componentes       | Componentes de la orden (reservas)
 //
 // La migración 025_erp_mm.sql crea lo mismo con RLS. Esto es el respaldo
 // idempotente en runtime (mismo patrón que ensureWmsSchema).
@@ -192,7 +195,109 @@ export async function ensureErpSchema(client) {
     )
   `);
 
+  await ensureErpPpSchema(client);
+
   schemaReady = true;
+}
+
+// Módulo PP (producción): recetas, órdenes y stock apartado para producción.
+// Respaldo runtime de migrations/031_erp_pp.sql.
+async function ensureErpPpSchema(client) {
+  await client.query(`
+    ALTER TABLE inventario_bodega
+      ADD COLUMN IF NOT EXISTS qty_reservada_produccion NUMERIC(14, 3) NOT NULL DEFAULT 0
+  `).catch((e) => console.warn('[ERP_SCHEMA] inventario_bodega', e.message));
+
+  // Solo si hace falta: un ALTER ... TYPE bloquea la tabla aunque no cambie nada.
+  await client.query(`
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'erp_cambios' AND column_name = 'clave' AND character_maximum_length < 140) THEN
+        ALTER TABLE erp_cambios ALTER COLUMN clave TYPE VARCHAR(140);
+      END IF;
+    END $$
+  `).catch((e) => console.warn('[ERP_SCHEMA] erp_cambios', e.message));
+
+  await client.query(`
+    ALTER TABLE erp_documentos_material_pos
+      ADD COLUMN IF NOT EXISTS aufnr VARCHAR(12),
+      ADD COLUMN IF NOT EXISTS rspos INTEGER
+  `).catch((e) => console.warn('[ERP_SCHEMA] documentos_material_pos', e.message));
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS erp_listas_materiales (
+      tenant_id      VARCHAR(64)    NOT NULL,
+      sku            VARCHAR(64)    NOT NULL,
+      centro         VARCHAR(64)    NOT NULL,
+      alternativa    VARCHAR(2)     NOT NULL DEFAULT '01',
+      cantidad_base  NUMERIC(14, 3) NOT NULL,
+      unidad         VARCHAR(16)    NOT NULL DEFAULT 'UN',
+      texto          VARCHAR(160),
+      created_by     VARCHAR(64),
+      created_at     TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (tenant_id, sku, centro, alternativa)
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS erp_listas_materiales_pos (
+      tenant_id    VARCHAR(64)    NOT NULL,
+      sku          VARCHAR(64)    NOT NULL,
+      centro       VARCHAR(64)    NOT NULL,
+      alternativa  VARCHAR(2)     NOT NULL DEFAULT '01',
+      posicion     INTEGER        NOT NULL,
+      componente   VARCHAR(64)    NOT NULL,
+      cantidad     NUMERIC(14, 3) NOT NULL,
+      unidad       VARCHAR(16)    NOT NULL DEFAULT 'UN',
+      merma_pct    NUMERIC(5, 2)  NOT NULL DEFAULT 0,
+      backflush    BOOLEAN        NOT NULL DEFAULT TRUE,
+      texto        VARCHAR(160),
+      PRIMARY KEY (tenant_id, sku, centro, alternativa, posicion)
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS erp_ordenes_produccion (
+      tenant_id           VARCHAR(64)    NOT NULL,
+      aufnr               VARCHAR(12)    NOT NULL,
+      clase_orden         VARCHAR(4)     NOT NULL DEFAULT 'PP01',
+      sku                 VARCHAR(64)    NOT NULL,
+      centro              VARCHAR(64)    NOT NULL,
+      alternativa         VARCHAR(2)     NOT NULL DEFAULT '01',
+      cantidad            NUMERIC(14, 3) NOT NULL,
+      cantidad_entregada  NUMERIC(14, 3) NOT NULL DEFAULT 0,
+      unidad              VARCHAR(16)    NOT NULL DEFAULT 'UN',
+      fecha_inicio        DATE,
+      fecha_fin           DATE,
+      estado              VARCHAR(4)     NOT NULL DEFAULT 'CRTD',
+      entrega_final       BOOLEAN        NOT NULL DEFAULT FALSE,
+      texto               VARCHAR(160),
+      created_by          VARCHAR(64),
+      created_at          TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+      liberada_at         TIMESTAMPTZ,
+      cerrada_at          TIMESTAMPTZ,
+      PRIMARY KEY (tenant_id, aufnr)
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS erp_ordenes_componentes (
+      tenant_id           VARCHAR(64)    NOT NULL,
+      aufnr               VARCHAR(12)    NOT NULL,
+      posicion            INTEGER        NOT NULL,
+      sku                 VARCHAR(64)    NOT NULL,
+      centro              VARCHAR(64)    NOT NULL,
+      cantidad_necesaria  NUMERIC(14, 3) NOT NULL,
+      cantidad_reservada  NUMERIC(14, 3) NOT NULL DEFAULT 0,
+      cantidad_retirada   NUMERIC(14, 3) NOT NULL DEFAULT 0,
+      unidad              VARCHAR(16)    NOT NULL DEFAULT 'UN',
+      merma_pct           NUMERIC(5, 2)  NOT NULL DEFAULT 0,
+      backflush           BOOLEAN        NOT NULL DEFAULT TRUE,
+      precio_plan         NUMERIC(16, 2) NOT NULL DEFAULT 0,
+      PRIMARY KEY (tenant_id, aufnr, posicion)
+    )
+  `);
 }
 
 /** true cuando el DDL ya corrió en este isolate. */

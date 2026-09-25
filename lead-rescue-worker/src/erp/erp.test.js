@@ -178,7 +178,7 @@ describe('MIGO', () => {
     expect(r.mensaje).toMatch(/1 pedido\(s\) de venta liberado\(s\) de quiebre: OT-QUIEBRE-1/);
     expect(r.invalidarTorre).toBe(true);
     const agg = c.consultas.find((x) => /array_agg/.test(x.sql));
-    expect(agg.params[2]).toEqual(['101', '501', '552', '701']);
+    expect(agg.params[2]).toEqual(['101', '262', '501', '552', '701']);
   });
 
   it('101 con WMS apagado no toca los quiebres', async () => {
@@ -454,7 +454,7 @@ describe('Inventario físico (MI01 / MI04 / MI07)', () => {
         zeile: p.zeile, sku: p.sku, texto_breve: p.sku, unidad: 'UN', precio_estandar: '100',
         cantidad_contada: p.contado == null ? null : String(p.contado), libre: String(p.libre), reservado: String(p.reservado || 0),
       }))],
-      [/SELECT qty_disponible, qty_reservada FROM inventario_bodega/, (prm) => [{ qty_disponible: String(porSku[prm[2]].libre), qty_reservada: String(porSku[prm[2]].reservado || 0) }]],
+      [/SELECT qty_disponible, qty_reservada( \+ qty_reservada_produccion AS qty_reservada)? FROM inventario_bodega/, (prm) => [{ qty_disponible: String(porSku[prm[2]].libre), qty_reservada: String(porSku[prm[2]].reservado || 0) }]],
       [/SELECT qty_disponible FROM inventario_bodega/, (prm) => [{ qty_disponible: String(porSku[prm[2]].libre) }]],
     ]);
   }
@@ -520,7 +520,7 @@ describe('Inventario físico (MI01 / MI04 / MI07)', () => {
   it('MI07 no contabiliza un faltante que se come stock reservado por la Torre', async () => {
     const c = clienteInv({ posiciones: [{ zeile: 1, sku: 'A', contado: 1, libre: 2, reservado: 5 }] }); // libro 7 → −6, libre 2
     await expect(TRANSACCIONES.MI07.post(tx('MI07', { documento: '100000000' }, { client: c, env: {} })))
-      .rejects.toThrow(/solo hay 2 libres; 5 están reservados por la Torre/);
+      .rejects.toThrow(/solo hay 2 libres; 5 están reservados \(pedidos de venta de la Torre u órdenes de producción/);
   });
 
   it('MI07 sin diferencias no crea documento de material', async () => {
