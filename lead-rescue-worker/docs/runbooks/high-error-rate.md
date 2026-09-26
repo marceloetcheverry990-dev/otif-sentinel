@@ -108,7 +108,7 @@ Si `value = 'OPEN'`, el sistema ya está manejando el fallo del servicio externo
 - Identificar el cambio (`git log --oneline -10`)
 - Si el error es crítico: revertir desde Cloudflare Dashboard → Workers → lead-rescue-pipeline → Deployments → seleccionar versión anterior → Rollback
 
-**Caso B — Error de integración externa (Telegram, OpenAI)**
+**Caso B — Error de integración externa (OpenAI, Mapbox)**
 - Los circuit breakers deberían estar activos (ver Paso 6)
 - Si `value = 'OPEN'`, el sistema está conteniendo el fallo — esperar auto-recovery
 - Si el servicio externo se recuperó pero el breaker sigue abierto, ver runbook `circuit-breaker-open.md`

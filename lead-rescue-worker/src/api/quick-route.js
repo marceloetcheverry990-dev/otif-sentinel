@@ -2,18 +2,19 @@
 // Ruta Rápida / Espontánea - Crea órdenes y un viaje desde la Torre de Control
 // Geocodificación: Mapbox + ArcGIS (N° de casa) con fallback Nominatim.
 
-import { CORS_HEADERS, requireTenantId } from '../config.js';
+import { CONFIG, CORS_HEADERS, requireTenantId } from '../config.js';
 import { withDb, withDbTransaction } from '../db.js';
 import { verifyOperatorToken } from '../helpers/operator-auth.js';
 import { geocodeAddress } from '../helpers/geocode.js';
 import { resolveDepot, depotToSolver } from '../helpers/depots.js';
-import { DEFAULT_DEPOT } from '../helpers/vrp-solver.js';
+import { DEFAULT_DEPOT, sequenceRoute } from '../helpers/vrp-solver.js';
 import { computeScanToken } from '../helpers/scan-token.js';
-import { fitsCapacity, normalizeTags } from '../helpers/cargo-constraints.js';
-import { resolveSlaFromTimeOfDay } from '../helpers/santiago-time.js';
+import { fitsCapacity, normalizeTags, hasHazmat, hasFood } from '../helpers/cargo-constraints.js';
+import { resolveSlaFromTimeOfDay, resolveTodayTimeOfDay } from '../helpers/santiago-time.js';
 import { parseFlotaDisponible } from '../helpers/optimizer-flota.js';
 import { optimizarRutas } from './optimizer.js';
 import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
+import { loadPerfilPesos, PERFIL_PESOS } from '../helpers/perfil-pesos.js';
 
 async function resolveOperatorTenant(request, env, operator = null) {
   if (operator?.tenant_id) {
@@ -70,58 +71,59 @@ async function geocodificarSecuencial(direcciones, env) {
 }
 
 /**
- * Ordena las paradas usando algoritmo nearest-neighbor (vecino más cercano)
- * Sale desde la bodega y en cada paso va a la parada más cercana no visitada
- * Devuelve el array de paradas reordenado con el índice original
+ * SLA de la parada: hora del día (Chile) > fecha explícita > horas legacy > 18:00.
  */
-function optimizarOrdenParadas(paradasConCoords, depot = DEFAULT_DEPOT) {
-  const BODEGA_LAT = depot.lat;
-  const BODEGA_LNG = depot.lng;
-
-  // Separar paradas con y sin coordenadas
-  const conCoords = paradasConCoords.filter(p => p.coords !== null);
-  const sinCoords = paradasConCoords.filter(p => p.coords === null);
-
-  if (conCoords.length <= 1) {
-    return paradasConCoords; // Sin suficientes puntos para optimizar
+export function resolveParadaSla(parada, now = new Date()) {
+  const fromClock = resolveSlaFromTimeOfDay(parada.sla_hora || parada.hora_limite_sla, now);
+  if (fromClock) return fromClock;
+  if (parada.fecha_hora_sla) {
+    const d = new Date(parada.fecha_hora_sla);
+    if (Number.isFinite(d.getTime())) return d.toISOString();
   }
-
-  function distancia(lat1, lng1, lat2, lng2) {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLng = (lng2 - lng1) * Math.PI / 180;
-    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLng/2)**2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const slaHorasLegacy = Number(parada.sla_horas);
+  if (Number.isFinite(slaHorasLegacy) && slaHorasLegacy > 0) {
+    return new Date(now.getTime() + slaHorasLegacy * 60 * 60 * 1000).toISOString();
   }
+  return resolveSlaFromTimeOfDay('18:00', now);
+}
 
-  const visitadas = new Set();
-  const resultado = [];
-  let currentLat = BODEGA_LAT;
-  let currentLng = BODEGA_LNG;
+/**
+ * Inicio de ventana: "HH:MM" del modal (hoy, Chile) o ISO. null si vacío/inválido.
+ * La columna es TIMESTAMPTZ — nunca insertar "09:00" crudo.
+ */
+export function resolveParadaVentanaInicio(parada, now = new Date()) {
+  const raw = parada.ventana_inicio;
+  if (!raw) return null;
+  const fromClock = resolveTodayTimeOfDay(raw, now);
+  if (fromClock) return fromClock;
+  const d = new Date(raw);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+}
 
-  while (visitadas.size < conCoords.length) {
-    let minDist = Infinity;
-    let nearest = null;
+/**
+ * Ordena paradas con el mismo secuenciador del VRP (vecino más cercano
+ * ponderado por urgencia SLA + 2-opt con ventanas horarias).
+ * Items: { parada, coords, sla, ventanaInicio, ventanaFin }. Sin coords → al final.
+ */
+export function optimizarOrdenParadas(items, depot = DEFAULT_DEPOT, {
+  startMs = Date.now(),
+  velocidadKmH = 35,
+  pesos = PERFIL_PESOS.equilibrado,
+} = {}) {
+  const conCoords = items.filter((p) => p.coords !== null);
+  const sinCoords = items.filter((p) => p.coords === null);
+  if (conCoords.length <= 1) return [...conCoords, ...sinCoords];
 
-    for (let i = 0; i < conCoords.length; i++) {
-      if (visitadas.has(i)) continue;
-      const d = distancia(currentLat, currentLng, conCoords[i].coords.lat, conCoords[i].coords.lng);
-      if (d < minDist) {
-        minDist = d;
-        nearest = i;
-      }
-    }
-
-    if (nearest !== null) {
-      visitadas.add(nearest);
-      resultado.push(conCoords[nearest]);
-      currentLat = conCoords[nearest].coords.lat;
-      currentLng = conCoords[nearest].coords.lng;
-    }
-  }
-
-  // Las paradas sin coordenadas van al final
-  return [...resultado, ...sinCoords];
+  const stops = conCoords.map((item) => ({
+    lat: item.coords.lat,
+    lng: item.coords.lng,
+    fecha_hora_sla: item.sla,
+    ventana_inicio: item.ventanaInicio,
+    ventana_fin: item.ventanaFin,
+    _item: item,
+  }));
+  const ordered = sequenceRoute(stops, { depot, startMs, velocidadKmH, pesos });
+  return [...ordered.map((s) => s._item), ...sinCoords];
 }
 
 export async function createQuickRoute(request, env, operator = null, ctx = null) {
@@ -190,9 +192,29 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
         coordenadas.push(await geocodificar(p.direccion, env));
       }
     }
-    // Optimizar el orden de visita usando nearest-neighbor
-    const paradasConCoords = paradas.map((p, i) => ({ parada: p, coords: coordenadas[i], originalIndex: i }));
-    const paradasOptimizadas = optimizarOrdenParadas(paradasConCoords, depot);
+    // Orden de visita: distancia + urgencia SLA + ventanas (mismo secuenciador que el VRP)
+    const now = new Date();
+    const paradasConCoords = paradas.map((p, i) => {
+      const sla = resolveParadaSla(p, now);
+      return {
+        parada: p,
+        coords: coordenadas[i],
+        originalIndex: i,
+        sla,
+        ventanaInicio: resolveParadaVentanaInicio(p, now),
+        ventanaFin: p.ventana_fin ? (resolveParadaVentanaInicio({ ventana_inicio: p.ventana_fin }, now) || sla) : sla,
+      };
+    });
+    // Mismo perfil que eligió el operador en la Torre
+    const perfilPesos = splitFleet
+      ? null
+      : await withDb(env, (c) => loadPerfilPesos(c, tenant_id, body.perfil_id), { tenantId: tenant_id })
+        .catch(() => PERFIL_PESOS.equilibrado);
+    const paradasOptimizadas = optimizarOrdenParadas(paradasConCoords, depot, {
+      startMs: now.getTime(),
+      velocidadKmH: CONFIG.VELOCIDAD_FALLBACK_KMH || 35,
+      pesos: perfilPesos || PERFIL_PESOS.equilibrado,
+    });
     const paradasOrdenadas = paradasOptimizadas.map(item => item.parada);
     const coordenadasOrdenadas = paradasOptimizadas.map(item => item.coords);
 
@@ -236,7 +258,6 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
     }
 
     if (splitFleet) {
-      const now = new Date();
       const dateStr = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Santiago',
         year: 'numeric', month: '2-digit', day: '2-digit',
@@ -248,15 +269,9 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
           const parada = paradasOrdenadas[i];
           const coords = coordenadasOrdenadas[i];
           const otId = `RR-${dateStr}-${batch}-${String(i + 1).padStart(2, '0')}`;
-          const slaIsoFromClock =
-            resolveSlaFromTimeOfDay(parada.sla_hora || parada.hora_limite_sla, now)
-            || (parada.fecha_hora_sla ? new Date(parada.fecha_hora_sla).toISOString() : null);
-          const slaDateIso = slaIsoFromClock || resolveSlaFromTimeOfDay('18:00', now);
-          const ventanaInicioIso = parada.ventana_inicio
-            ? (String(parada.ventana_inicio).includes('T')
-              ? parada.ventana_inicio
-              : resolveSlaFromTimeOfDay(parada.ventana_inicio, now))
-            : null;
+          const slaDateIso = paradasOptimizadas[i].sla;
+          const ventanaInicioIso = paradasOptimizadas[i].ventanaInicio;
+          const ventanaFinIso = paradasOptimizadas[i].ventanaFin;
           const tagsReq = normalizeTags(parada.tags || parada.tags_requeridos || []);
           const pesoKg = Number(parada.peso_kg || parada.peso || 0) || 0;
           const volumen = Number(parada.volumen || 1) || 1;
@@ -285,7 +300,7 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
               params: [
                 otId, parada.cliente.trim(), parada.monto || 0, slaDateIso,
                 JSON.stringify(metadata), tenant_id, coords?.lat || null, coords?.lng || null,
-                pesoKg, volumen, ventanaInicioIso, slaDateIso, JSON.stringify(tagsReq),
+                pesoKg, volumen, ventanaInicioIso, ventanaFinIso, JSON.stringify(tagsReq),
               ],
             },
             {
@@ -327,6 +342,7 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
           tenant_id,
           perfil_id: body.perfil_id || 1,
           flota_disponible: flotaDisponible,
+          usar_todos: body.usar_todos === true,
           clima: body.clima || 'NORMAL',
           depot_id: body.depot_id || null,
           is_simulacion: false,
@@ -348,11 +364,11 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
         split_fleet: true,
         viajes_creados: optData.viajes_creados || 0,
         paradas_creadas: paradasOrdenadas.length,
-        chofer: `${optData.viajes_creados || 0} camiones (equilibrado)`,
+        chofer: `${optData.viajes_creados || 0} de ${flotaDisponible} camiones`,
         trip_id: (optData.viajes || optData.trips || []).map((v) => v.trip_id).filter(Boolean).join(', ') || 'varios',
         km_totales: optData.km_totales || optData.kmEstimado || null,
         costo_operativo: optData.costo_operativo || null,
-        mensaje: `Se armaron ${optData.viajes_creados || 0} viajes con ${paradasOrdenadas.length} paradas (N° camiones = ${flotaDisponible}).`,
+        mensaje: `Se armaron ${optData.viajes_creados || 0} viajes con ${paradasOrdenadas.length} paradas${optData.resumen ? ` (${optData.resumen})` : ''}.`,
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
@@ -396,10 +412,9 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
         tags: normalizeTags(p.tags || p.tags_requeridos || []),
       }));
       {
+        // Listas HAZMAT/FOOD solo en cargo-constraints.js (incluye PELIGROSO del modal)
         const allTags = stopsForCap.flatMap((s) => s.tags);
-        const haz = allTags.some((t) => ['HAZMAT', 'ADR', 'PELGEROSO'].includes(t));
-        const food = allTags.some((t) => ['FOOD', 'ALIMENTO', 'ALIMENTOS', 'FRIO_ALIMENTO'].includes(t));
-        if (haz && food) {
+        if (hasHazmat(allTags) && hasFood(allTags)) {
           throw Object.assign(
             new Error('Segregación HAZMAT/FOOD: no se puede mezclar en la misma ruta rápida'),
             { statusCode: 400, code: 'segregation' }
@@ -422,7 +437,6 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
         );
       }
 
-      const now = new Date();
       // J-2 + M-19: fecha Santiago + UUID (no Math.random de 4 chars)
       const dateStr = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Santiago',
@@ -443,19 +457,11 @@ export async function createQuickRoute(request, env, operator = null, ctx = null
         const otId = `${tripId}-${String(i + 1).padStart(2, '0')}`;
         otIds.push(otId);
 
-        const slaIsoFromClock =
-          resolveSlaFromTimeOfDay(parada.sla_hora || parada.hora_limite_sla, now)
-          || (parada.fecha_hora_sla ? new Date(parada.fecha_hora_sla).toISOString() : null);
-        const slaHorasLegacy = Number(parada.sla_horas);
-        const slaDateIso = slaIsoFromClock
-          || (Number.isFinite(slaHorasLegacy) && slaHorasLegacy > 0
-            ? new Date(now.getTime() + slaHorasLegacy * 60 * 60 * 1000).toISOString()
-            : resolveSlaFromTimeOfDay('18:00', now));
-
+        const slaDateIso = paradasOptimizadas[i].sla;
         const scanTok = await computeScanToken(tenant_id, otId, env);
         const pesoKg = Number(parada.peso_kg || parada.peso || 0) || 0;
-        const ventanaInicio = parada.ventana_inicio || null;
-        const ventanaFin = parada.ventana_fin || slaDateIso || null;
+        const ventanaInicio = paradasOptimizadas[i].ventanaInicio;
+        const ventanaFin = paradasOptimizadas[i].ventanaFin;
         const tagsReq = normalizeTags(parada.tags || parada.tags_requeridos || []);
         const metadata = {
           origen: 'RUTA_RAPIDA',

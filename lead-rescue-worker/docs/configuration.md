@@ -8,7 +8,7 @@
 ## Índice
 
 1. [Feature Flags — Monitoring](#1-feature-flags--monitoring)
-2. [Alerting / Telegram](#2-alerting--telegram)
+2. [Alertas y servicios externos](#2-alertas-y-servicios-externos)
 3. [Database / Hyperdrive](#3-database--hyperdrive)
 4. [Queues](#4-queues)
 5. [R2 Storage](#5-r2-storage)
@@ -87,7 +87,7 @@ Estas variables controlan qué subsistemas de monitoreo están activos.
 | **Ubicación** | `wrangler.jsonc` → `vars` |
 | **Valor actual** | `"true"` |
 | **Obligatoria** | No |
-| **Impacto funcional** | Controla si se envían alertas por Telegram. **Actualmente no funciona** — mismo bug. |
+| **Impacto funcional** | Controla si se evalúan y registran alertas en `alert_history`. **Actualmente no funciona** — mismo bug. |
 | **Valores válidos** | `"true"` / `"false"` |
 | **Valor por defecto** | `true` |
 | **Riesgo de modificar** | Medio |
@@ -110,50 +110,12 @@ Estas variables controlan qué subsistemas de monitoreo están activos.
 
 ---
 
-## 2. Alerting / Telegram
+## 2. Alertas y servicios externos
 
-### `TG_BOT_TOKEN`
-
-| Campo | Valor |
-|-------|-------|
-| **Ubicación** | Cloudflare Secret (`.dev.vars` localmente) |
-| **Valor actual** | Secret — no exponer |
-| **Obligatoria** | Sí — sin esto no se envían alertas ni mensajes a choferes |
-| **Impacto funcional** | Token del bot de Telegram. Usado por alertas de monitoreo y por el sistema de entrega de rutas. |
-| **Valores válidos** | String con formato `<número>:<cadena_alfanumérica>` |
-| **Valor por defecto** | Sin default — el sistema falla silenciosamente si no está configurado |
-| **Riesgo de modificar** | Crítico. Cambiar el token sin actualizar el bot en Telegram rompe todas las notificaciones. |
-| **Requiere deploy** | No (Secret — se actualiza sin redeploy) |
-
----
-
-### `SALES_TEAM_CHAT_ID`
-
-| Campo | Valor |
-|-------|-------|
-| **Ubicación** | `wrangler.jsonc` → `vars` |
-| **Valor actual** | `-1003818832328` |
-| **Obligatoria** | Sí — es el fallback cuando `MONITORING_CHAT_ID` no está configurado |
-| **Impacto funcional** | ID del chat de Telegram donde se envían alertas operativas y mensajes a choferes |
-| **Valores válidos** | String numérico (negativo para grupos) |
-| **Valor por defecto** | Sin default |
-| **Riesgo de modificar** | Alto. Cambiar redirige todas las notificaciones al chat nuevo. |
-| **Requiere deploy** | Sí |
-
----
-
-### `MONITORING_CHAT_ID` (no configurada actualmente)
-
-| Campo | Valor |
-|-------|-------|
-| **Ubicación** | No está en `wrangler.jsonc` |
-| **Valor actual** | No configurada |
-| **Obligatoria** | No (fallback a `SALES_TEAM_CHAT_ID`) |
-| **Impacto funcional** | Si se configura, las alertas de monitoreo se envían a este chat separado del chat de negocio |
-| **Valores válidos** | String numérico (negativo para grupos) |
-| **Valor por defecto** | No aplica — usa `SALES_TEAM_CHAT_ID` si no está |
-| **Riesgo de modificar** | Bajo |
-| **Requiere deploy** | Sí |
+Las alertas de monitoreo no salen a ningún canal externo: `sendAlert()` las
+registra en el log del Worker y en `alert_history`, y se leen desde
+`/dashboard/monitoring`. El chat app ↔ Torre vive en `bitacora_viajes`
+(`/api/chat`). El sistema no usa Telegram (se eliminó en la migración 030).
 
 ---
 
@@ -297,8 +259,8 @@ reintentarse hasta 10 veces desde el outbox antes de moverse a DLQ.
 |-------|-------|
 | **Ubicación** | `wrangler.jsonc` → `vars` |
 | **Valor actual** | `"https://lead-rescue-pipeline.marceloetcheverry990.workers.dev"` |
-| **Obligatoria** | No (usada en links del dashboard y alertas de Telegram) |
-| **Impacto funcional** | URL base para generar links en mensajes de Telegram y el dashboard |
+| **Obligatoria** | No (usada en links del dashboard y del portal público de tracking) |
+| **Impacto funcional** | URL base para generar links absolutos (dashboard, avisos a clientes, portal público) |
 | **Riesgo de modificar** | Bajo |
 | **Requiere deploy** | Sí |
 
@@ -367,12 +329,6 @@ Todos hardcodeados en `src/monitoring/config.js`. Requieren deploy para modifica
 ## 9. Dependencias entre variables
 
 ```
-TG_BOT_TOKEN ──────────────────────────────────────────── Alertas de monitoreo
-     │                                                     Mensajes a choferes
-     │
-     └─► SALES_TEAM_CHAT_ID ──────────────────────────── Chat de destino (fallback)
-         MONITORING_CHAT_ID (no configurada) ──────────── Chat de destino (primario)
-
 HYPERDRIVE binding ────────────────────────────────────── Toda operación de DB
      │
      └─► MONITORING_* feature flags ──────────────────── Subsistemas de monitoreo
@@ -397,8 +353,6 @@ MAIN_QUEUE + ENRICHMENT_QUEUE + DELIVERY_QUEUE ───────────
 
 | Si cambiás... | También revisar... |
 |---------------|-------------------|
-| `TG_BOT_TOKEN` | Verificar que el token pertenece al bot correcto con `getMe` |
-| `SALES_TEAM_CHAT_ID` | Confirmar que el bot tiene permisos en el nuevo chat |
 | `HYPERDRIVE` ID | Verificar que el nuevo binding apunta a la DB correcta |
 | `MONITORING_SAMPLE_RATE` | Estimar el nuevo volumen de escrituras en `metrics_summary` |
 | `MONITORING_PASSWORD` | Actualizar en todos los lugares donde se guarda la contraseña |
@@ -442,12 +396,10 @@ Requiere removerla de `vars` y volver a deployar.
 
 | Variable | Ubicación | Crítica para producción | Estado |
 |----------|-----------|------------------------|--------|
-| `TG_BOT_TOKEN` | Secret | 🔴 Crítica | ✅ Activa |
 | `HYPERDRIVE` binding | wrangler.jsonc | 🔴 Crítica | ✅ Activa |
 | `MAIN_QUEUE` binding | wrangler.jsonc | 🔴 Crítica | ✅ Activa |
 | `ENRICHMENT_QUEUE` binding | wrangler.jsonc | 🔴 Crítica | ✅ Activa |
 | `DELIVERY_QUEUE` binding | wrangler.jsonc | 🔴 Crítica | ✅ Activa |
-| `SALES_TEAM_CHAT_ID` | wrangler.jsonc → vars | 🔴 Crítica | ✅ Activa |
 | `OPENAI_API_KEY` | Secret | 🔴 Crítica | ✅ Activa |
 | `chat_photos` binding (R2) | wrangler.jsonc | 🟡 Alta | ✅ Activa |
 | `MONITORING_USERNAME` | wrangler.jsonc → vars | 🟡 Alta | ✅ Activa |
@@ -458,7 +410,6 @@ Requiere removerla de `vars` y volver a deployar.
 | `MONITORING_METRICS` | wrangler.jsonc → vars | 🟢 Baja | ⚠️ No funcional (ver Issue 1) |
 | `MONITORING_ALERTING` | wrangler.jsonc → vars | 🟢 Baja | ⚠️ No funcional (ver Issue 1) |
 | `MONITORING_SAMPLE_RATE` | wrangler.jsonc → vars | 🟢 Baja | ✅ Activa (`getMonitoringConfig` la lee) |
-| `MONITORING_CHAT_ID` | No configurada | 🟢 Baja | ⚠️ Faltante (usa fallback a `SALES_TEAM_CHAT_ID`) |
 | `JWT_SECRET` | No configurada | 🟢 Baja | ⚠️ Faltante (solo si se activa auth JWT) |
 | `META_APP_SECRET` | Secret (.dev.vars) | 🟡 Alta | ✅ Solo desarrollo local |
 | `ORDER_INGEST_SECRET` | Secret | 🟡 Alta | HMAC para `POST /api/webhooks/orders` (global) |
@@ -532,7 +483,7 @@ Requiere removerla de `vars` y volver a deployar.
 | Clave | Default | Significado |
 |-------|---------|-------------|
 | `YELLOW_STUCK_MIN` | 15 | Minutos quieto → alerta amarilla |
-| `RED_STUCK_MIN` | 40 | Minutos quieto → alerta roja + prioriza Telegram |
+| `RED_STUCK_MIN` | 40 | Minutos quieto → alerta roja |
 | `SIGNAL_LOST_MIN` | 15 | Sin pings GPS → `SIGNAL_LOST` |
 | `MOVE_THRESHOLD_KM` | 0.05 | Movimiento “significativo” (50 m) |
 | `GPS_TRAIL_MIN_INTERVAL_SEC` | 45 | Heartbeat de trail |
@@ -550,7 +501,7 @@ Requiere removerla de `vars` y volver a deployar.
 
 ### App chofer
 
-`GET /api/app-chofer-rutas` incluye `misiones_rescate` cuando hay una misión `DISPATCHED` hacia el viaje del chofer. Telegram notifica al confirmar.
+`GET /api/app-chofer-rutas` incluye `misiones_rescate` cuando hay una misión `DISPATCHED` hacia el viaje del chofer. La app muestra un aviso al chofer cuando la recibe.
 
 ### Notas operativas
 

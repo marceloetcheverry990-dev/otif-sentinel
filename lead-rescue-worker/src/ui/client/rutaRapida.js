@@ -125,6 +125,9 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
             document.getElementById('rrCamionListo').checked = draft.camion_listo !== false;
             var nCamEl = document.getElementById('camionesDisponibles');
             if (nCamEl) nCamEl.value = '3';
+            // El video muestra la flota partida en 3: con "hasta N" podría salir 1 camión
+            var usarTodosEl = document.getElementById('usarTodosCamiones');
+            if (usarTodosEl) usarTodosEl.checked = true;
             var perfilEl = document.getElementById('perfilRuteo');
             if (perfilEl) {
               var eq = Array.from(perfilEl.options).find(function(o) {
@@ -646,6 +649,7 @@ export const RUTA_RAPIDA_SCRIPT = String.raw`
                 paradas,
                 depot_id: (document.getElementById('depotRuteo') || {}).value || null,
                 flota_disponible: parseInt((document.getElementById('camionesDisponibles') || {}).value, 10) || 1,
+                usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                 perfil_id: (document.getElementById('perfilRuteo') || {}).value || 1,
                 clima: (document.getElementById('climaRuteo') || {}).value || 'NORMAL',
               })

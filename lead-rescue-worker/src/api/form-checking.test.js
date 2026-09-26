@@ -17,6 +17,7 @@ import { getChoferRutas } from './app-chofer-rutas.js';
 import { handleGPSPing } from './gps.js';
 import { handleChoferEvento } from './app-chofer-evento.js';
 import { syncChoferEvent } from './app-chofer-sync.js';
+import { createFakePgTx } from '../test-utils/fake-pg-tx.js';
 
 // ─── Constantes de test ───────────────────────────────────────────────────────
 // PBT seed fija: reproducibilidad garantizada entre runs
@@ -366,11 +367,11 @@ describe('T10 - fix checking endpoints', () => {
     expect((await r3.json()).code).toBe('trip_not_assigned');
 
     // 200 camino feliz
-    pgClientMock.query = vi.fn()
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] }) // autoría
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{ ultima_lat: '-33.420', ultima_lng: '-70.600', km_recorridos_reales: '5.0', ultima_actualizacion: new Date(Date.now() - 60000).toISOString() }] })
-      .mockResolvedValueOnce({ rowCount: 1 })
-      .mockResolvedValueOnce({ rowCount: 1 });
+    pgClientMock = createFakePgTx([
+      [/rut_chofer_asignado/, { rowCount: 1, rows: [{}] }], // autoría
+      [/SELECT ultima_lat/, { rowCount: 1, rows: [{ ultima_lat: '-33.420', ultima_lng: '-70.600', km_recorridos_reales: '5.0', ultima_actualizacion: new Date(Date.now() - 60000).toISOString() }] }],
+      [/^UPDATE/, { rowCount: 1 }],
+    ]).client;
     const r4 = await handleGPSPing(
       makePostRequest('/api/gps/ping', { trip_id: 'V-001', tenant_id: 'empresa_demo', lat: -33.430, lng: -70.610 }, {}, token),
       TEST_ENV
@@ -454,18 +455,19 @@ describe('T10 - preservation', () => {
   // --- Filtros GPS: ruido (delta < 50m no acumula km) ---
   it('GPS filtro ruido: ping con delta < 50m no acumula km (gps_ruido=1)', async () => {
     const token = await makeValidToken();
-    pgClientMock.query = vi.fn()
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] }) // autoría
-      .mockResolvedValueOnce({
+    const fake = createFakePgTx([
+      [/rut_chofer_asignado/, { rowCount: 1, rows: [{}] }], // autoría
+      [/SELECT ultima_lat/, {
         rowCount: 1,
         rows: [{
           ultima_lat: '-33.430000', ultima_lng: '-70.610000',
           km_recorridos_reales: '10.0',
           ultima_actualizacion: new Date(Date.now() - 30000).toISOString(),
         }],
-      })
-      .mockResolvedValueOnce({ rowCount: 1 }) // UPDATE flota
-      .mockResolvedValueOnce({ rowCount: 1 }); // UPDATE trip_metrics
+      }],
+      [/^UPDATE/, { rowCount: 1 }], // UPDATE flota / trip_metrics
+    ]);
+    pgClientMock = fake.client;
 
     // Coordenadas casi idénticas — delta << 50m
     const res = await handleGPSPing(
@@ -481,29 +483,30 @@ describe('T10 - preservation', () => {
     expect(body.km_actuales).toBe(10.0);
 
     // Verificar que el UPDATE de trip_metrics recibió gps_ruido=1 y km=0
-    const tripMetricsCall = pgClientMock.query.mock.calls[3];
-    expect(tripMetricsCall[1][0]).toBe(0);     // delta acumulado = 0
-    expect(tripMetricsCall[1][1]).toBe(1);     // gps_descartados_ruido = 1
-    expect(tripMetricsCall[1][2]).toBe(0);     // gps_descartados_vel = 0
-    expect(tripMetricsCall[1][3]).toBe(0);     // gps_descartados_salto = 0
+    const [tripMetricsCall] = fake.callsMatching(/^UPDATE trip_metrics/);
+    expect(tripMetricsCall.params[0]).toBe(0);     // delta acumulado = 0
+    expect(tripMetricsCall.params[1]).toBe(1);     // gps_descartados_ruido = 1
+    expect(tripMetricsCall.params[2]).toBe(0);     // gps_descartados_vel = 0
+    expect(tripMetricsCall.params[3]).toBe(0);     // gps_descartados_salto = 0
   });
 
   // --- Filtros GPS: velocidad imposible (> 130 km/h no acumula km) ---
   it('GPS filtro velocidad: ping con velocidad > 130 km/h no acumula km (gps_vel=1)', async () => {
     const token = await makeValidToken();
     const hace5seg = new Date(Date.now() - 5000).toISOString(); // solo 5 segundos atrás
-    pgClientMock.query = vi.fn()
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] }) // autoría
-      .mockResolvedValueOnce({
+    const fake = createFakePgTx([
+      [/rut_chofer_asignado/, { rowCount: 1, rows: [{}] }], // autoría
+      [/SELECT ultima_lat/, {
         rowCount: 1,
         rows: [{
           ultima_lat: '-33.000', ultima_lng: '-70.000',
           km_recorridos_reales: '20.0',
           ultima_actualizacion: hace5seg,
         }],
-      })
-      .mockResolvedValueOnce({ rowCount: 1 })
-      .mockResolvedValueOnce({ rowCount: 1 });
+      }],
+      [/^UPDATE/, { rowCount: 1 }],
+    ]);
+    pgClientMock = fake.client;
 
     // 5 segundos → para 200 km necesitaría ~144,000 km/h. Usamos 0.2 grados de lat (~22km) en 5s ≈ 16000 km/h
     const res = await handleGPSPing(
@@ -517,9 +520,9 @@ describe('T10 - preservation', () => {
     const body = await res.json();
     expect(body.km_actuales).toBe(20.0); // sin cambio
 
-    const tripMetricsCall = pgClientMock.query.mock.calls[3];
-    expect(tripMetricsCall[1][0]).toBe(0); // km acumulado = 0
-    expect(tripMetricsCall[1][2]).toBe(1); // gps_descartados_vel = 1
+    const [tripMetricsCall] = fake.callsMatching(/^UPDATE trip_metrics/);
+    expect(tripMetricsCall.params[0]).toBe(0); // km acumulado = 0
+    expect(tripMetricsCall.params[2]).toBe(1); // gps_descartados_vel = 1
   });
 
   // --- Máquina de estados: LLEGADA congela hora_llegada_chofer ---

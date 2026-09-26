@@ -5,8 +5,8 @@
 
 import { CORS_HEADERS, requireTenantId } from '../config.js';
 import {
-  downsampleLatLngs,
   fetchDrivingGeometry,
+  simplifyLatLngs,
 } from '../helpers/mapbox-directions.js';
 
 const JSON_HEADERS = { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
@@ -62,10 +62,8 @@ export async function getRouteGeometry(request, env, operator = null) {
     });
   }
 
-  const latlngs = downsampleLatLngs(
-    route.geometry.coordinates.map((c) => [c[1], c[0]]),
-    400,
-  );
+  // Douglas-Peucker (no muestreo por índice): la línea sigue la calle a cualquier zoom
+  const latlngs = simplifyLatLngs(route.geometry.coordinates.map((c) => [c[1], c[0]]));
   return json({
     exito: true,
     fallback: false,

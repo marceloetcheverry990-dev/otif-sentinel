@@ -10,7 +10,7 @@
 
 ## Síntomas
 
-Mensaje de Telegram:
+Alerta en el dashboard de monitoreo (`alert_history`):
 
 ```
 🚨 ALERTA: CRITICAL

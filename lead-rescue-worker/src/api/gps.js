@@ -6,6 +6,7 @@ import { verifyOperatorToken } from '../helpers/operator-auth.js';
 import { shouldSampleTrail } from '../helpers/gps-trail.js';
 import { resolveGpsEventTime } from '../helpers/gps-timestamp.js';
 import { maybeAutoLlegada } from '../helpers/auto-llegada.js';
+import { withSavepoint } from '../helpers/pg-savepoint.js';
 import {
   getLiveFleetCacheEntry,
   setLiveFleetCacheEntry,
@@ -25,6 +26,46 @@ function calcularDistanciaKm(lat1, lon1, lat2, lon2) {
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
     Math.sin(dLon / 2) ** 2;
   return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 100) / 100;
+}
+
+// El ping corre en una TX (withDb con tenantId → BEGIN). Antes, cualquier paso
+// opcional que fallaba (trail, geocerca, ETA, columna faltante) abortaba la TX y
+// el COMMIT hacía ROLLBACK en silencio: se perdían posición y km aunque
+// respondiéramos 200. Cada paso opcional va en su propio SAVEPOINT.
+
+async function updateFlotaPosition(client, { lat, lng, kmDelta, trip_id, tenant_id, eventIso, moved }) {
+  try {
+    await withSavepoint(client, 'sp_gps_upd', () => client.query(
+      `UPDATE flota_vehiculos
+       SET ultima_lat = $1,
+           ultima_lng = $2,
+           km_recorridos_reales = COALESCE(km_recorridos_reales, 0) + $3,
+           ultima_actualizacion = CASE
+             WHEN ultima_actualizacion IS NULL OR $6::timestamptz >= ultima_actualizacion
+             THEN $6::timestamptz ELSE ultima_actualizacion END,
+           last_significant_move_at = CASE
+             WHEN $7::boolean AND (
+               last_significant_move_at IS NULL OR $6::timestamptz >= last_significant_move_at
+             ) THEN $6::timestamptz
+             WHEN last_significant_move_at IS NULL THEN $6::timestamptz
+             ELSE last_significant_move_at
+           END
+       WHERE trip_id_actual = $4 AND tenant_id = $5`,
+      [lat, lng, kmDelta, trip_id, tenant_id, eventIso, moved]
+    ));
+  } catch (updErr) {
+    if (!String(updErr.message || '').includes('last_significant_move_at')) throw updErr;
+    await client.query(
+      `UPDATE flota_vehiculos
+       SET ultima_lat = $1, ultima_lng = $2,
+           km_recorridos_reales = COALESCE(km_recorridos_reales, 0) + $3,
+           ultima_actualizacion = CASE
+             WHEN ultima_actualizacion IS NULL OR $6::timestamptz >= ultima_actualizacion
+             THEN $6::timestamptz ELSE ultima_actualizacion END
+       WHERE trip_id_actual = $4 AND tenant_id = $5`,
+      [lat, lng, kmDelta, trip_id, tenant_id, eventIso]
+    );
+  }
 }
 
 export async function handleGPSPing(request, env, ctx) {
@@ -81,15 +122,15 @@ export async function handleGPSPing(request, env, ctx) {
 
       let resFlota;
       try {
-        resFlota = await client.query(
+        resFlota = await withSavepoint(client, 'sp_gps_sel', () => client.query(
           `SELECT ultima_lat, ultima_lng,
                   COALESCE(km_recorridos_reales, 0) AS km_recorridos_reales,
                   ultima_actualizacion,
                   last_significant_move_at
-           FROM flota_vehiculos 
+           FROM flota_vehiculos
            WHERE trip_id_actual = $1 AND tenant_id = $2 LIMIT 1`,
           [trip_id, tenant_id]
-        );
+        ));
       } catch (colErr) {
         if (String(colErr.message || '').includes('last_significant_move_at')) {
           resFlota = await client.query(
@@ -119,11 +160,19 @@ export async function handleGPSPing(request, env, ctx) {
       } = resFlota.rows[0];
       const kmPrevios = parseFloat(km_recorridos_reales) || 0;
 
+      // Ping atrasado (reintento de la cola offline que llega después de uno más
+      // nuevo): no mover el camión hacia atrás ni sumar km entre puntos que no
+      // son consecutivos — eso duplicaba km (B→A→C en vez de A→B→C).
+      const prevUpdateMs = ultima_actualizacion ? new Date(ultima_actualizacion).getTime() : NaN;
+      const stale = Number.isFinite(prevUpdateMs) && eventTime.ms < prevUpdateMs;
+
       let gps_ruido = 0, gps_vel = 0, gps_salto = 0;
       let acumular = false;
       let delta = 0;
 
-      if (ultima_lat !== null && ultima_lng !== null) {
+      if (stale) {
+        // cuenta como ping recibido, sin tocar posición ni km
+      } else if (ultima_lat !== null && ultima_lng !== null) {
         delta = calcularDistanciaKm(parseFloat(ultima_lat), parseFloat(ultima_lng), lat, lng);
 
         if (delta < 0.05) {
@@ -156,75 +205,55 @@ export async function handleGPSPing(request, env, ctx) {
       const eventIso = eventTime.iso;
 
       // A-4: incremento atómico — no read-modify-write en JS
+      if (!stale) await updateFlotaPosition(client, {
+        lat, lng, kmDelta, trip_id, tenant_id, eventIso, moved: significantMove || seedMove,
+      });
+
+      // KPI km plan vs real: best-effort. Un fallo acá no puede tumbar la
+      // posición del camión (antes devolvía 500 y el ping se perdía entero).
+      // COALESCE: filas creadas sin defaults dejaban km_reales NULL para siempre.
       try {
-        await client.query(
-          `UPDATE flota_vehiculos 
-           SET ultima_lat = $1, 
-               ultima_lng = $2, 
-               km_recorridos_reales = COALESCE(km_recorridos_reales, 0) + $3, 
-               ultima_actualizacion = CASE
-                 WHEN ultima_actualizacion IS NULL OR $6::timestamptz >= ultima_actualizacion
-                 THEN $6::timestamptz ELSE ultima_actualizacion END,
-               last_significant_move_at = CASE
-                 WHEN $7::boolean AND (
-                   last_significant_move_at IS NULL OR $6::timestamptz >= last_significant_move_at
-                 ) THEN $6::timestamptz
-                 WHEN last_significant_move_at IS NULL THEN $6::timestamptz
-                 ELSE last_significant_move_at
-               END
-           WHERE trip_id_actual = $4 AND tenant_id = $5`,
-          [lat, lng, kmDelta, trip_id, tenant_id, eventIso, significantMove || seedMove]
-        );
-      } catch (updErr) {
-        if (!String(updErr.message || '').includes('last_significant_move_at')) throw updErr;
-        await client.query(
-          `UPDATE flota_vehiculos 
-           SET ultima_lat = $1, ultima_lng = $2,
-               km_recorridos_reales = COALESCE(km_recorridos_reales, 0) + $3,
-               ultima_actualizacion = CASE
-                 WHEN ultima_actualizacion IS NULL OR $6::timestamptz >= ultima_actualizacion
-                 THEN $6::timestamptz ELSE ultima_actualizacion END
-           WHERE trip_id_actual = $4 AND tenant_id = $5`,
-          [lat, lng, kmDelta, trip_id, tenant_id, eventIso]
-        );
+        await withSavepoint(client, 'sp_gps_tm', () => client.query(
+          `UPDATE trip_metrics
+           SET
+             km_reales             = COALESCE(km_reales, 0) + $1,
+             tiempo_real_min       = EXTRACT(EPOCH FROM (NOW() - iniciado_at))::INTEGER / 60,
+             gps_pings_total       = COALESCE(gps_pings_total, 0) + 1,
+             gps_descartados_ruido = COALESCE(gps_descartados_ruido, 0) + $2,
+             gps_descartados_vel   = COALESCE(gps_descartados_vel, 0)   + $3,
+             gps_descartados_salto = COALESCE(gps_descartados_salto, 0) + $4,
+             updated_at            = NOW()
+           WHERE trip_id = $5 AND tenant_id = $6`,
+          [kmDelta, gps_ruido, gps_vel, gps_salto, trip_id, tenant_id]
+        ));
+      } catch (tmErr) {
+        console.warn('[GPS_TRIP_METRICS]', tmErr.message);
       }
 
-      await client.query(
-        `UPDATE trip_metrics
-         SET
-           km_reales             = km_reales + $1,
-           tiempo_real_min       = EXTRACT(EPOCH FROM (NOW() - iniciado_at))::INTEGER / 60,
-           gps_pings_total       = gps_pings_total + 1,
-           gps_descartados_ruido = gps_descartados_ruido + $2,
-           gps_descartados_vel   = gps_descartados_vel   + $3,
-           gps_descartados_salto = gps_descartados_salto + $4,
-           updated_at            = NOW()
-         WHERE trip_id = $5 AND tenant_id = $6`,
-        [kmDelta, gps_ruido, gps_vel, gps_salto, trip_id, tenant_id]
-      );
-
       try {
-        const lastTrail = await client.query(
-          `SELECT EXTRACT(EPOCH FROM recorded_at) * 1000 AS ms
-           FROM gps_trail
-           WHERE tenant_id = $1 AND trip_id = $2
-           ORDER BY recorded_at DESC LIMIT 1`,
-          [tenant_id, trip_id]
-        );
-        const decision = shouldSampleTrail({
-          lastTrailAtMs: lastTrail.rows[0]?.ms != null ? Number(lastTrail.rows[0].ms) : null,
-          nowMs: eventTime.ms,
-          deltaKm: delta,
-          minIntervalSec: LR().GPS_TRAIL_MIN_INTERVAL_SEC,
-          moveThresholdKm: moveThreshold,
-        });
-        if (decision.sample) {
-          await client.query(
-            `INSERT INTO gps_trail (tenant_id, trip_id, lat, lng, delta_km, is_heartbeat, recorded_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)`,
-            [tenant_id, trip_id, lat, lng, Number.isFinite(delta) ? delta : null, decision.isHeartbeat, eventIso]
+        await withSavepoint(client, 'sp_gps_trail', async () => {
+          const lastTrail = await client.query(
+            `SELECT EXTRACT(EPOCH FROM recorded_at) * 1000 AS ms
+             FROM gps_trail
+             WHERE tenant_id = $1 AND trip_id = $2
+             ORDER BY recorded_at DESC LIMIT 1`,
+            [tenant_id, trip_id]
           );
-        }
+          const decision = shouldSampleTrail({
+            lastTrailAtMs: lastTrail.rows[0]?.ms != null ? Number(lastTrail.rows[0].ms) : null,
+            nowMs: eventTime.ms,
+            deltaKm: delta,
+            minIntervalSec: LR().GPS_TRAIL_MIN_INTERVAL_SEC,
+            moveThresholdKm: moveThreshold,
+          });
+          if (decision.sample) {
+            await client.query(
+              `INSERT INTO gps_trail (tenant_id, trip_id, lat, lng, delta_km, is_heartbeat, recorded_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)`,
+              [tenant_id, trip_id, lat, lng, Number.isFinite(delta) ? delta : null, decision.isHeartbeat, eventIso]
+            );
+          }
+        });
       } catch (trailErr) {
         if (trailErr?.code !== '42P01') {
           console.warn('[GPS_TRAIL_SKIP]', trailErr.message);
@@ -234,14 +263,14 @@ export async function handleGPSPing(request, env, ctx) {
       // Auto-LLEGADA por geocerca (completa hora_llegada sin botón del chofer)
       let autoLlegada = null;
       try {
-        autoLlegada = await maybeAutoLlegada(client, {
+        autoLlegada = await withSavepoint(client, 'sp_gps_geo', () => maybeAutoLlegada(client, {
           tenant_id,
           trip_id,
           lat,
           lng,
           eventIso,
           radiusM: CONFIG.GEO_LLEGADA_RADIUS_M || 150,
-        });
+        }));
       } catch (geoErr) {
         console.warn('[AUTO_LLEGADA_ERR]', geoErr.message);
       }
@@ -249,39 +278,41 @@ export async function handleGPSPing(request, env, ctx) {
       // ETA_15MIN: próxima parada abierta con ETA dentro de 15 min
       // Skip barato si ya hay outbox PENDING/SENT/FAILED para ese evento
       try {
-        const { enqueueCustomerNotify } = await import('../helpers/customer-notify.js');
-        const next = await client.query(
-          `SELECT ot_id, eta
-           FROM ordenes_pendientes
-           WHERE tenant_id = $1 AND trip_id = $2
-             AND estado_operacional NOT IN ('ENTREGADO','RECHAZADO','CANCELADO_PLANILLA','EN_SITIO')
-             AND eta IS NOT NULL
-           ORDER BY stop_sequence ASC NULLS LAST
-           LIMIT 1`,
-          [tenant_id, trip_id]
-        );
-        const row = next.rows[0];
-        if (row?.eta) {
-          const mins = (new Date(row.eta).getTime() - Date.now()) / 60000;
-          if (mins >= 0 && mins <= 15) {
-            const already = await client.query(
-              `SELECT 1 FROM customer_notifications
-               WHERE tenant_id = $1 AND ot_id = $2 AND event_type = 'ETA_15MIN'
-                 AND status IN ('PENDING','SENT','FAILED')
-               LIMIT 1`,
-              [tenant_id, row.ot_id]
-            );
-            if (!already.rowCount) {
-              const job = enqueueCustomerNotify(env, {
-                tenantId: tenant_id,
-                otId: row.ot_id,
-                tripId: trip_id,
-                eventType: 'ETA_15MIN',
-              }).catch(() => {});
-              if (ctx?.waitUntil) ctx.waitUntil(job);
+        await withSavepoint(client, 'sp_gps_eta', async () => {
+          const { enqueueCustomerNotify } = await import('../helpers/customer-notify.js');
+          const next = await client.query(
+            `SELECT ot_id, eta
+             FROM ordenes_pendientes
+             WHERE tenant_id = $1 AND trip_id = $2
+               AND estado_operacional NOT IN ('ENTREGADO','RECHAZADO','CANCELADO_PLANILLA','EN_SITIO')
+               AND eta IS NOT NULL
+             ORDER BY stop_sequence ASC NULLS LAST
+             LIMIT 1`,
+            [tenant_id, trip_id]
+          );
+          const row = next.rows[0];
+          if (row?.eta) {
+            const mins = (new Date(row.eta).getTime() - Date.now()) / 60000;
+            if (mins >= 0 && mins <= 15) {
+              const already = await client.query(
+                `SELECT 1 FROM customer_notifications
+                 WHERE tenant_id = $1 AND ot_id = $2 AND event_type = 'ETA_15MIN'
+                   AND status IN ('PENDING','SENT','FAILED')
+                 LIMIT 1`,
+                [tenant_id, row.ot_id]
+              );
+              if (!already.rowCount) {
+                const job = enqueueCustomerNotify(env, {
+                  tenantId: tenant_id,
+                  otId: row.ot_id,
+                  tripId: trip_id,
+                  eventType: 'ETA_15MIN',
+                }).catch(() => {});
+                if (ctx?.waitUntil) ctx.waitUntil(job);
+              }
             }
           }
-        }
+        });
       } catch (etaNotifyErr) {
         if (etaNotifyErr?.code !== '42P01' && !String(etaNotifyErr.message || '').includes('customer_notifications')) {
           console.warn('[NOTIFY_ETA15]', etaNotifyErr.message);

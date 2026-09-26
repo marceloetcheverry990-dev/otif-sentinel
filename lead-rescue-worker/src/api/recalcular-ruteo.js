@@ -13,8 +13,9 @@ import { enrichOrdersWithSlaRisk } from '../helpers/sla-risk.js';
 import { getEffectiveSpeedKmh, applyClimaToSpeed } from '../helpers/speed-calibration.js';
 import { computeScanToken } from '../helpers/scan-token.js';
 import { parseFlotaDisponible } from '../helpers/optimizer-flota.js';
-import { resolvePerfilPesos } from '../helpers/perfil-pesos.js';
+import { loadPerfilPesos } from '../helpers/perfil-pesos.js';
 import { solveVrpAuto, calcularDistanciaKm } from '../helpers/vrp-solver.js';
+import { normalizeFleet, matchRoutesToFleet } from '../helpers/fleet-matching.js';
 import { rebuildSequences } from '../helpers/midday-reopt.js';
 import {
   classifyTripStops,
@@ -22,7 +23,7 @@ import {
   estimateOpenEtas,
   parseSelectedTripIds,
 } from '../helpers/recalcular-ruteo.js';
-import { tryOptimizerLock, releaseOptimizerLock } from './optimizer.js';
+import { tryOptimizerLock, releaseOptimizerLock, ROAD_FACTOR } from './optimizer.js';
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -102,6 +103,7 @@ export async function recalcularRuteo(request, env, ctx, operator = null) {
     return json({ exito: false, error: 'TRIPS_REQUIRED', msg: selectedTrips.error }, 400);
   }
   const incluirBacklog = body.incluir_backlog === true;
+  const usarTodos = body.usar_todos === true;
   const clima = body.clima || 'NORMAL';
   const perfilId = parseInt(body.perfil_id, 10) || null;
 
@@ -126,29 +128,8 @@ export async function recalcularRuteo(request, env, ctx, operator = null) {
       velocidad = applyClimaToSpeed(CONFIG.VELOCIDAD_FALLBACK_KMH || 35, clima);
     }
 
-    let perfilPesos = resolvePerfilPesos(null);
-    let perfilNombre = perfilPesos.nombre_perfil;
-    if (perfilId) {
-      let perfilData = null;
-      let errPerfil = null;
-      ({ data: perfilData, error: errPerfil } = await supabase
-        .from('perfiles_optimizacion')
-        .select('peso_distancia, peso_sla, peso_valor_carga, peso_riesgo_ia, nombre_perfil, tenant_id')
-        .eq('perfil_id', perfilId)
-        .or(`tenant_id.eq.${tenant_id},tenant_id.is.null`)
-        .maybeSingle());
-      if (errPerfil && /tenant_id/.test(String(errPerfil.message || ''))) {
-        ({ data: perfilData, error: errPerfil } = await supabase
-          .from('perfiles_optimizacion')
-          .select('peso_distancia, peso_sla, peso_valor_carga, peso_riesgo_ia, nombre_perfil')
-          .eq('perfil_id', perfilId)
-          .maybeSingle());
-      }
-      if (perfilData) {
-        perfilPesos = resolvePerfilPesos(perfilData);
-        perfilNombre = perfilPesos.nombre_perfil;
-      }
-    }
+    const perfilPesos = await loadPerfilPesos(supabase, tenant_id, perfilId);
+    const perfilNombre = perfilPesos.nombre_perfil;
 
     const { data: clientesRows } = await supabase
       .from('clientes')
@@ -297,6 +278,7 @@ export async function recalcularRuteo(request, env, ctx, operator = null) {
     let viajesNuevos = 0;
     let viajesFusionados = 0;
     let vehicleTarget = 0;
+    let camionesUsados = 0;
     const sinAsignar = [];
 
     const persistOpen = (tripId, choferId, frozen, open, seed, extraMeta = {}) => {
@@ -381,17 +363,21 @@ export async function recalcularRuteo(request, env, ctx, operator = null) {
       if (!drivers.length) {
         sinAsignar.push(...pool.map((p) => p.ot_id).filter(Boolean));
       } else {
-      const avgVol = drivers.reduce((s, c) => s + (Number(c.capacidad_volumen) || 100), 0) / drivers.length;
-      const avgPeso = drivers.reduce((s, c) => s + (Number(c.capacidad_peso) || 99999), 0) / drivers.length;
+      const flota = drivers.map((c) => ({
+        capacity: Number(c.capacidad_volumen) || 100,
+        capacityWeight: Number(c.capacidad_peso) || 99999,
+      }));
       const vrp = solveVrpAuto(pool, {
         depot,
-        capacity: avgVol,
-        capacityWeight: avgPeso,
+        vehicles: flota,
         maxVehicles: vehicleTarget,
+        forceAllVehicles: usarTodos,
         maxStopsPerRoute: 24,
         startMs: Date.now(),
         pesos: perfilPesos,
         velocidadKmH: velocidad,
+        roadFactor: ROAD_FACTOR,
+        lunchBreak: true,
       });
 
       const tripByChofer = new Map();
@@ -400,17 +386,19 @@ export async function recalcularRuteo(request, env, ctx, operator = null) {
       }
       const usedTripIds = new Set();
       const usedChofer = new Set();
-      const vrpRoutes = (vrp.routes || []).filter((r) => r.length).sort((a, b) => b.length - a.length);
+      const vrpRoutes = (vrp.routes || []).filter((r) => r.length);
+      // El solver ya no pierde paradas; si alguna faltara, vuelve a pendientes
+      // (antes se metía a la fuerza en la primera ruta, sin mirar capacidad).
       const covered = new Set(vrpRoutes.flat().map((s) => String(s.ot_id)));
-      const missing = pool.filter((p) => p.ot_id && !covered.has(String(p.ot_id)));
-      if (missing.length) {
-        if (vrpRoutes.length) vrpRoutes[0].push(...missing);
-        else vrpRoutes.push(missing);
-      }
+      sinAsignar.push(...pool.filter((p) => p.ot_id && !covered.has(String(p.ot_id))).map((p) => p.ot_id));
+      // Cada ruta al chofer cuyo camión la puede llevar (flota mixta)
+      const fleet = normalizeFleet(flota);
+      const { vehicleOf } = matchRoutesToFleet(vrpRoutes, fleet);
+      camionesUsados = vehicleOf.filter((v) => v !== -1).length;
 
       vrpRoutes.forEach((route, idx) => {
         if (!route.length) return;
-        const ch = drivers[idx];
+        const ch = vehicleOf[idx] === -1 ? null : drivers[fleet[vehicleOf[idx]].idx];
         if (!ch) {
           sinAsignar.push(...route.map((r) => r.ot_id));
           return;
@@ -473,12 +461,14 @@ export async function recalcularRuteo(request, env, ctx, operator = null) {
     const partes = [];
     if (reseqInProgress) partes.push(`${reseqInProgress} viaje(s) en curso reordenados`);
     if (pool.length) {
-      partes.push(`perfil «${perfilNombre}», clima ${clima}, ${vehicleTarget || nCamiones} camión(es)`);
+      partes.push(`perfil «${perfilNombre}», clima ${clima}, ${camionesUsados} de ${nCamiones} camión(es)`);
     }
     if (viajesNuevos) partes.push(`${viajesNuevos} viaje(s) nuevo(s)`);
     if (viajesFusionados) partes.push(`${viajesFusionados} viaje(s) fusionado(s)`);
-    if (nCamiones > vehicleTarget && vehicleTarget > 0) {
-      partes.push(`pediste ${nCamiones} camiones y se usaron ${vehicleTarget} (no hay más choferes libres para estas rutas)`);
+    if (usarTodos && vehicleTarget > 0 && nCamiones > vehicleTarget) {
+      partes.push(`pediste usar ${nCamiones} camiones y hay ${vehicleTarget} choferes libres para estas rutas`);
+    } else if (!usarTodos && camionesUsados > 0 && camionesUsados < nCamiones) {
+      partes.push('los demás camiones no hacían falta');
     }
     if (sinAsignar.length) partes.push(`${sinAsignar.length} parada(s) volvieron a pendientes`);
     return json({
@@ -494,7 +484,8 @@ export async function recalcularRuteo(request, env, ctx, operator = null) {
       },
       clima,
       camiones: nCamiones,
-      camiones_usados: vehicleTarget || 0,
+      camiones_usados: camionesUsados,
+      usar_todos: usarTodos,
       velocidad_kmh: velocidad,
       viajes_en_curso: reseqInProgress,
       viajes_nuevos: viajesNuevos,

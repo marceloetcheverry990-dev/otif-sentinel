@@ -9,6 +9,7 @@ import {
   signOperatorToken,
 } from '../helpers/operator-auth.js';
 import { signDriverToken } from '../helpers/driver-auth.js';
+import { invalidateTowerPoll } from '../helpers/tower-poll-cache.js';
 
 // ─── Envs ────────────────────────────────────────────────────────────────────
 const OPERATOR_ENV = {
@@ -77,6 +78,9 @@ describe('Preservación — endpoints protegidos', () => {
     choferToken = await makeChoferToken();
     mockDbState.allQueryCalls = [];
     mockDbState.lastMockClient = null;
+    // El poll de la Torre se cachea unos segundos por tenant: sin esto, un test
+    // recibe la respuesta del anterior y nunca llega a la BD.
+    invalidateTowerPoll('empresa_base');
     vi.clearAllMocks();
   });
 

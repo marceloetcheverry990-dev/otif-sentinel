@@ -210,6 +210,8 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           font-weight: 700;
           color: #64748b;
         }
+        .header-check { cursor: pointer; padding: 0.3rem 0.5rem; }
+        .header-check input { margin: 0; accent-color: var(--primary); cursor: pointer; }
         .header-trucks {
           width: 2.6rem;
           min-width: 2.6rem;
@@ -416,6 +418,16 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
         .map-container { flex: 1; position: relative; background: #e2e8f0; }
         #map { position: absolute; inset: 0; width: 100%; height: 100%; }
 
+        /* Pantallas angostas: el sidebar (min 450px) dejaba el mapa en 0px de ancho.
+           Se apilan: lista con scroll propio arriba, mapa abajo. */
+        @media (max-width: 900px) {
+          body { height: auto; min-height: 100vh; overflow: auto; }
+          .app-container { flex-direction: column; overflow: visible; }
+          .sidebar { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--border); }
+          .list-viewport { max-height: 60vh; }
+          .map-container { flex: none; height: 70vh; min-height: 320px; }
+        }
+
         /* --- LEAD RESCUE / DEAD MAN BANNER --- */
         .lead-rescue-banner {
           position: sticky; top: 0; z-index: 10050;
@@ -599,6 +611,10 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             <label class="header-trucks-wrap" title="Camiones disponibles">
               <span class="header-trucks-label">N°</span>
               <input type="number" id="camionesDisponibles" class="input-base header-trucks" value="3" min="1" max="50" step="1">
+            </label>
+            <label class="header-trucks-wrap header-check" title="Marcado: usa los N camiones, repartidos parejo. Sin marcar: usa solo los que hagan falta (hasta N).">
+              <input type="checkbox" id="usarTodosCamiones">
+              <span class="header-trucks-label">Usar todos</span>
             </label>
             <button type="button" id="btnOptimize" class="btn-primary btn-compact" title="El ruteo se calcula en Cloudflare Workers (servidor). El navegador no corre el VRP.">Rutear</button>
             <button type="button" id="btnRecalcularRuteo" class="btn btn-compact" title="Elegí qué rutas ya armadas (todavía no salieron) recalcular con el perfil, N° de camiones y clima.">Recalcular</button>
@@ -959,7 +975,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <script id="ordenes-json" type="application/json">[{"ot_id":"OT-PEND-001","cliente":"Cliente Pendiente A","tenant_id":"empresa_demo","trip_id":"","estado_operacional":"PENDIENTE_RUTEO","monto_total":180000,"direccion":"Av. Las Condes 1234, Santiago","lat":-33.41,"lng":-70.55},{"ot_id":"OT-PEND-002","cliente":"Cliente Pendiente B","tenant_id":"empresa_demo","trip_id":null,"estado_operacional":"PENDIENTE_RUTEO","monto_total":95000,"direccion":"Calle Tocopilla 567, Providencia, Santiago","lat":-33.43,"lng":-70.61}]</script>
       <script id="viajes-json" type="application/json">[{"trip_id":"VIAJE-001","chofer":"Juan Pérez","chofer_id":"CHF-01","detalle_paradas":[{"ot_id":"OT-1001","cliente":"Empresa Alpha","monto_total":500000,"estado_operacional":"EN_RUTA","eta":"2025-07-01T16:00:00.000Z","fecha_hora_sla":"2025-07-01T13:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"09:00","_hora_real_str":"--:--","_eta_str":"12:00","_search_str":"ot-1001 empresa alpha"},{"ot_id":"OT-1002","cliente":"Empresa Beta","monto_total":300000,"estado_operacional":"CAMION_ASIGNADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"--:--","_eta_str":"10:00","_search_str":"ot-1002 empresa beta"}],"_multa_calculada":50000,"_riesgo_dinamico":1,"_search_str":"viaje-001 juan pérez ot-1001 empresa alpha ot-1002 empresa beta"},{"trip_id":"VIAJE-002","chofer":"María González","chofer_id":"CHF-02","detalle_paradas":[{"ot_id":"OT-2001","cliente":"Empresa Gamma","monto_total":200000,"estado_operacional":"EN_RUTA","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"--:--","_eta_str":"10:00","_search_str":"ot-2001 empresa gamma"},{"ot_id":"OT-2002","cliente":"Empresa Delta","monto_total":150000,"estado_operacional":"ENTREGADO","eta":"2025-07-01T16:00:00.000Z","fecha_hora_sla":"2025-07-01T13:00:00.000Z","hora_real":"2025-07-01T12:30:00.000Z","metadata":null,"_fecha_sla_str":"09:00","_hora_real_str":"08:30","_eta_str":"12:00","_search_str":"ot-2002 empresa delta"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-002 maría gonzález ot-2001 empresa gamma ot-2002 empresa delta"},{"trip_id":"VIAJE-003","chofer":"Pedro Soto","chofer_id":"CHF-03","detalle_paradas":[{"ot_id":"OT-3001","cliente":"Empresa Epsilon","monto_total":100000,"estado_operacional":"ENTREGADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":"2025-07-01T10:00:00.000Z","metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"06:00","_eta_str":"10:00","_search_str":"ot-3001 empresa epsilon"},{"ot_id":"OT-3002","cliente":"Empresa Zeta","monto_total":75000,"estado_operacional":"RECHAZADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":"2025-07-01T11:00:00.000Z","metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"07:00","_eta_str":"10:00","_search_str":"ot-3002 empresa zeta"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-003 pedro soto ot-3001 empresa epsilon ot-3002 empresa zeta"},{"trip_id":"VIAJE-004","chofer":"Ana \`Backtick\` Ruiz","chofer_id":"CHF-04","detalle_paradas":[{"ot_id":"OT-\`\${xss}\`","cliente":"Empresa \`\${alert(1)}\` Corp","monto_total":250000,"estado_operacional":"EN_RUTA","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"--:--","_eta_str":"10:00","_search_str":"ot-\`\${xss}\` empresa \`\${alert(1)}\` corp"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-004 ana \`backtick\` ruiz ot-\`\${xss}\` empresa \`\${alert(1)}\` corp"}]</script>
-      <script id="config-json" type="application/json">{"BODEGA":{"LAT":-33.5132,"LNG":-70.7672,"NOMBRE":"Bodega Central"},"ESTADOS":{"PENDIENTE":"PENDIENTE_RUTEO","ASIGNADO":"CAMION_ASIGNADO","EN_RUTA":"EN_RUTA","ENTREGADO":"ENTREGADO","RECHAZADO":"RECHAZADO","CANCELADO":"CANCELADO_PLANILLA","RETORNO":"RETORNO_BODEGA"},"UI":{"COLORS":{"EXITO":"#10b981","ALERTA":"#ef4444","NEUTRAL":"#2563eb","WARNING":"#f59e0b"}},"WMS":{"ENABLED":false},"tenant_id":"empresa_demo","operator":null,"depots":[],"dte_live":false,"wms_enabled":false,"last_sync_date":"2025-07-01T14:00:00.000Z"}</script>
+      <script id="config-json" type="application/json">{"BODEGA":{"LAT":-33.5132,"LNG":-70.7672,"NOMBRE":"Bodega Central"},"ESTADOS":{"PENDIENTE":"PENDIENTE_RUTEO","ASIGNADO":"CAMION_ASIGNADO","EN_RUTA":"EN_RUTA","ENTREGADO":"ENTREGADO","RECHAZADO":"RECHAZADO","CANCELADO":"CANCELADO_PLANILLA","RETORNO":"RETORNO_BODEGA"},"UI":{"COLORS":{"EXITO":"#10b981","ALERTA":"#ef4444","NEUTRAL":"#2563eb","WARNING":"#f59e0b"}},"WMS":{"ENABLED":false},"tenant_id":"empresa_demo","operator":null,"depots":[],"dte_live":false,"wms_enabled":false,"MAP_TILES":null,"last_sync_date":"2025-07-01T14:00:00.000Z"}</script>
       <script id="choferes-json" type="application/json">[{"chofer_id":"CHF-01","nombre_completo":"Juan Pérez Morales","rut":"","gps_interval_seconds":10},{"chofer_id":"CHF-02","nombre_completo":"María González López","rut":"","gps_interval_seconds":30}]</script>
 
         <div id="chatOffcanvas" class="chat-panel">
@@ -1368,36 +1384,6 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }).join(';');
         }
 
-        function dist2LatLng(a, b) {
-          var dlat = Number(a[0]) - Number(b[0]);
-          var dlng = Number(a[1]) - Number(b[1]);
-          return dlat * dlat + dlng * dlng;
-        }
-
-        function splitSnappedRoundTrip(snapped, lastStop, depot) {
-          if (!Array.isArray(snapped) || snapped.length < 4 || !lastStop) {
-            return { outbound: snapped, ret: null };
-          }
-          var n = snapped.length;
-          var from = Math.max(1, Math.floor(n * 0.08));
-          var to = Math.max(from + 1, Math.floor(n * 0.92));
-          var bestI = from;
-          var best = Infinity;
-          for (var i = from; i < to; i++) {
-            var d = dist2LatLng(snapped[i], lastStop);
-            if (d < best) { best = d; bestI = i; }
-          }
-          if (depot && dist2LatLng(snapped[bestI], depot) < 1e-7) {
-            return { outbound: snapped, ret: null };
-          }
-          var outbound = snapped.slice(0, bestI + 1);
-          var ret = snapped.slice(bestI);
-          if (outbound.length < 2 || ret.length < 2) {
-            return { outbound: snapped, ret: null };
-          }
-          return { outbound: outbound, ret: ret };
-        }
-
         async function fetchSnappedRoute(latlngs, signal) {
           var key = routeGeomKey(latlngs);
           if (routeGeomCache.has(key)) return routeGeomCache.get(key);
@@ -1452,7 +1438,33 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           try {
             map = L.map('map', { preferCanvas: true, zoomControl: false }).setView([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG], 11);
             L.control.zoom({ position: 'topright' }).addTo(map);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
+            // CARTO sin API key servía tiles borrosas con "API KEY REQUIRED".
+            // El servidor decide: Mapbox vía Worker (URL firmada) u OSM.
+            var tilesCfg = (CONFIG && CONFIG.MAP_TILES) || {
+              url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              attribution: '&copy; OpenStreetMap',
+              maxZoom: 19,
+              maxNativeZoom: 19
+            };
+            var baseLayer = L.tileLayer(tilesCfg.url, {
+              attribution: tilesCfg.attribution,
+              maxZoom: tilesCfg.maxZoom || 19,
+              maxNativeZoom: tilesCfg.maxNativeZoom || tilesCfg.maxZoom || 19
+            }).addTo(map);
+            // La firma vence (24 h): si la Torre queda abierta, pedir una URL nueva
+            // en vez de dejar el mapa en gris.
+            var lastTileRefresh = 0;
+            baseLayer.on('tileerror', function() {
+              if (String(tilesCfg.url || '').indexOf('/api/map-tiles/') !== 0) return;
+              if (Date.now() - lastTileRefresh < 10 * 60 * 1000) return;
+              lastTileRefresh = Date.now();
+              fetch('/api/map-tiles/config', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(cfg) {
+                  if (cfg && cfg.url) { tilesCfg = cfg; baseLayer.setUrl(cfg.url); }
+                })
+                .catch(function() {});
+            });
 
             const bodegaIcon = L.divIcon({ html: '<div style="background:var(--accent); color:white; width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:18px; border:2px solid white; box-shadow:0 4px 6px rgba(0,0,0,0.2);">🏭</div>', className: '', iconSize: [36,36], iconAnchor: [18,18] });
             L.marker([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG], {icon: bodegaIcon}).bindPopup("<b>" + (CONFIG.BODEGA.NOMBRE || "Bodega") + "</b>").addTo(map);
@@ -1627,23 +1639,20 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 return;
               }
 
-              let finalLat = Number(p.lat);
-              let finalLng = Number(p.lng);
-              
+              const finalLat = Number(p.lat);
+              const finalLng = Number(p.lng);
+
               if (isNaN(finalLat) || isNaN(finalLng)) {
                 console.warn("[DEFENSIVO] Parada de viaje omitida por coordenadas NaN:", p);
                 return;
               }
-              
-              const coordKey = finalLat.toFixed(4) + ',' + finalLng.toFixed(4);
-              
-              if (coordOcurrences[coordKey]) {
-                  coordOcurrences[coordKey]++;
-                  finalLat += (Math.random() - 0.5) * 0.002;
-                  finalLng += (Math.random() - 0.5) * 0.002;
-              } else {
-                  coordOcurrences[coordKey] = 1;
-              }
+
+              // La ruta va a la coordenada real. Paradas en el mismo punto se abren
+              // corriendo el ícono (antes se movía el punto al azar: la línea iba a un
+              // lugar inventado, distinto en cada redibujo, y el caché nunca pegaba).
+              const coordKey = finalLat.toFixed(5) + ',' + finalLng.toFixed(5);
+              const dupIdx = coordOcurrences[coordKey] || 0;
+              coordOcurrences[coordKey] = dupIdx + 1;
 
               coordsDirectas.push([finalLat, finalLng]);
               
@@ -1654,8 +1663,10 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               else if (p.estado_operacional === CONFIG.ESTADOS.RECHAZADO) hexColor = CONFIG.UI.COLORS.ALERTA; 
               else if (isLate) hexColor = CONFIG.UI.COLORS.WARNING; 
               
-              const pinHtml = '<div style="background:' + hexColor + '; color:white; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:2px solid white;">' + (index + 1) + '</div>';
-              const marker = L.marker([finalLat, finalLng], {icon: L.divIcon({ html: pinHtml, className: '', iconSize: [26,26], iconAnchor: [13,13] })}).bindPopup('<b>Stop ' + (index+1) + ': ' + escapeHTMLFront(p.cliente) + '</b>');
+              // Mismo número que el panel (stop_sequence), no el índice entre las que tienen coords
+              const seqLabel = escapeHTMLFront(String(p.stop_sequence != null && p.stop_sequence !== '' ? p.stop_sequence : index + 1));
+              const pinHtml = '<div style="background:' + hexColor + '; color:white; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:2px solid white;">' + seqLabel + '</div>';
+              const marker = L.marker([finalLat, finalLng], {icon: L.divIcon({ html: pinHtml, className: '', iconSize: [26,26], iconAnchor: [13 - dupIdx * 16, 13] })}).bindPopup('<b>Parada ' + seqLabel + ': ' + escapeHTMLFront(p.cliente) + '</b>');
               newLayers.push(marker);
             });
 
@@ -1691,33 +1702,36 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             await yieldToUI();
             if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
 
-            var tour = coordsDirectas.slice();
-            if (tour.length >= 1) {
-              var last = tour[tour.length - 1];
-              if (!last || last[0] !== CONFIG.BODEGA.LAT || last[1] !== CONFIG.BODEGA.LNG) {
-                tour.push([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
-              }
-            }
-            if (tour.length >= 2) {
-              var snapped = await fetchSnappedRoute(tour, signal);
+            // Ida (bodega → paradas) y vuelta (última → bodega) en requests separados.
+            // Antes se pedía el circuito entero y se partía adivinando el punto más
+            // cercano a la última parada: la ida y la vuelta quedaban mal cortadas.
+            var depotLL = [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG];
+            var hasDepot = Number.isFinite(depotLL[0]) && Number.isFinite(depotLL[1]);
+            var outboundPts = coordsDirectas.slice();
+            var returnPts = hasDepot && coordsDirectas.length > 1
+              ? [coordsDirectas[coordsDirectas.length - 1], depotLL]
+              : null;
+            if (outboundPts.length >= 2) {
+              var snappedParts = await Promise.all([
+                fetchSnappedRoute(outboundPts, signal),
+                returnPts ? fetchSnappedRoute(returnPts, signal) : Promise.resolve(null)
+              ]);
               if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
-              if (snapped && snapped.length > 1) {
-                try { if (outboundLine) layerViajeActivo.removeLayer(outboundLine); } catch (_) {}
+              var snappedOut = snappedParts[0];
+              var snappedRet = snappedParts[1];
+              if (snappedRet && snappedRet.length > 1) {
                 try { if (returnLine) layerViajeActivo.removeLayer(returnLine); } catch (_) {}
-                for (var li = newLayers.length - 1; li >= 0; li--) {
-                  if (newLayers[li] === outboundLine || newLayers[li] === returnLine) newLayers.splice(li, 1);
-                }
-                var lastStop = coordsDirectas[coordsDirectas.length - 1];
-                var depotLL = [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG];
-                var parts = splitSnappedRoundTrip(snapped, lastStop, depotLL);
-                outboundLine = L.polyline(parts.outbound, streetStyle);
+                if (newLayers.indexOf(returnLine) !== -1) newLayers.splice(newLayers.indexOf(returnLine), 1);
+                returnLine = L.polyline(snappedRet, returnStyle);
+                returnLine.addTo(layerViajeActivo);
+                newLayers.push(returnLine);
+              }
+              if (snappedOut && snappedOut.length > 1) {
+                try { if (outboundLine) layerViajeActivo.removeLayer(outboundLine); } catch (_) {}
+                if (newLayers.indexOf(outboundLine) !== -1) newLayers.splice(newLayers.indexOf(outboundLine), 1);
+                outboundLine = L.polyline(snappedOut, streetStyle);
                 outboundLine.addTo(layerViajeActivo);
                 newLayers.push(outboundLine);
-                if (parts.ret && parts.ret.length > 1) {
-                  returnLine = L.polyline(parts.ret, returnStyle);
-                  returnLine.addTo(layerViajeActivo);
-                  newLayers.push(returnLine);
-                }
                 window._snappedTrips[safeTripId] = true;
                 var snapBounds = L.featureGroup(newLayers).getBounds().extend([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
                 if (snapBounds.isValid()) {
@@ -2279,7 +2293,8 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               }
 
               // Override dispatcher: ↑ ↓ mover (paradas abiertas; no canceladas)
-              var isCancelado = String(p.estado_operacional || '').toUpperCase() === 'CANCELADO_PLANILLA';
+              var stUpper = String(p.estado_operacional || '').toUpperCase();
+              var isCancelado = stUpper === 'CANCELADO_PLANILLA' || stUpper === 'RETORNO_BODEGA';
               var overrideBtns = '';
               if (!isEntregado && !isRechazado && !isEnSitio && !isCancelado) {
                 overrideBtns =
@@ -3016,7 +3031,9 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     if (!viaje) return;
                     var abiertas = (viaje.detalle_paradas || []).filter(function(p) {
                       var st = String(p.estado_operacional || '').toUpperCase();
-                      return st !== 'ENTREGADO' && st !== 'RECHAZADO' && st !== 'EN_SITIO' && st !== 'CANCELADO_PLANILLA';
+                      // Mismo criterio que trip-manual.js: congeladas + fuera de ruta no van en ot_ids
+                      return st !== 'ENTREGADO' && st !== 'RECHAZADO' && st !== 'EN_SITIO'
+                        && st !== 'CANCELADO_PLANILLA' && st !== 'RETORNO_BODEGA';
                     });
                     var ids = abiertas.map(function(p) { return String(p.ot_id); });
                     var idx = ids.indexOf(String(otId));
@@ -3293,6 +3310,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     tenant_id: window._TENANT_ID || 'empresa_base',
                     perfil_id: document.getElementById('perfilRuteo').value, 
                     flota_disponible: nCamiones,
+                    usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                     clima: document.getElementById('climaRuteo').value,
                     depot_id: (document.getElementById('depotRuteo') || {}).value || null,
                     is_simulacion: false 
@@ -3303,8 +3321,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 if (res.ok && Number(data.viajes_creados || 0) > 0) {
                   var syncOk = document.getElementById('syncStatus');
                   if (syncOk) {
-                    syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados';
+                    syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados' +
+                      (data.camiones_disponibles ? ' (' + data.viajes_creados + ' de ' + data.camiones_disponibles + ' camiones)' : '');
+                    syncOk.title = data.resumen || '';
                     syncOk.style.color = '#86efac';
+                  }
+                  if (Array.isArray(data.sin_asignar_ids) && data.sin_asignar_ids.length) {
+                    setTimeout(function() {
+                      alert('Ruteo listo, pero ' + data.sin_asignar_ids.length + ' OT(s) quedaron sin chofer que las pueda llevar (capacidad, tags o faltan camiones). Siguen en Backlog.');
+                    }, 0);
                   }
                   if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
                   if (busy) busy.textContent = 'Aplicando rutas… el mapa sigue activo.';
@@ -3400,6 +3425,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     incluir_backlog: incluirBacklog,
                     perfil_id: perfilEl && perfilEl.value,
                     flota_disponible: nCamiones,
+                    usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                     clima: climaEl && climaEl.value,
                     depot_id: (document.getElementById('depotRuteo') || {}).value || null
                   })
@@ -3743,6 +3769,9 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             document.getElementById('rrCamionListo').checked = draft.camion_listo !== false;
             var nCamEl = document.getElementById('camionesDisponibles');
             if (nCamEl) nCamEl.value = '3';
+            // El video muestra la flota partida en 3: con "hasta N" podría salir 1 camión
+            var usarTodosEl = document.getElementById('usarTodosCamiones');
+            if (usarTodosEl) usarTodosEl.checked = true;
             var perfilEl = document.getElementById('perfilRuteo');
             if (perfilEl) {
               var eq = Array.from(perfilEl.options).find(function(o) {
@@ -4264,6 +4293,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 paradas,
                 depot_id: (document.getElementById('depotRuteo') || {}).value || null,
                 flota_disponible: parseInt((document.getElementById('camionesDisponibles') || {}).value, 10) || 1,
+                usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                 perfil_id: (document.getElementById('perfilRuteo') || {}).value || 1,
                 clima: (document.getElementById('climaRuteo') || {}).value || 'NORMAL',
               })
@@ -4925,6 +4955,8 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           font-weight: 700;
           color: #64748b;
         }
+        .header-check { cursor: pointer; padding: 0.3rem 0.5rem; }
+        .header-check input { margin: 0; accent-color: var(--primary); cursor: pointer; }
         .header-trucks {
           width: 2.6rem;
           min-width: 2.6rem;
@@ -5131,6 +5163,16 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
         .map-container { flex: 1; position: relative; background: #e2e8f0; }
         #map { position: absolute; inset: 0; width: 100%; height: 100%; }
 
+        /* Pantallas angostas: el sidebar (min 450px) dejaba el mapa en 0px de ancho.
+           Se apilan: lista con scroll propio arriba, mapa abajo. */
+        @media (max-width: 900px) {
+          body { height: auto; min-height: 100vh; overflow: auto; }
+          .app-container { flex-direction: column; overflow: visible; }
+          .sidebar { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--border); }
+          .list-viewport { max-height: 60vh; }
+          .map-container { flex: none; height: 70vh; min-height: 320px; }
+        }
+
         /* --- LEAD RESCUE / DEAD MAN BANNER --- */
         .lead-rescue-banner {
           position: sticky; top: 0; z-index: 10050;
@@ -5315,6 +5357,10 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               <span class="header-trucks-label">N°</span>
               <input type="number" id="camionesDisponibles" class="input-base header-trucks" value="3" min="1" max="50" step="1">
             </label>
+            <label class="header-trucks-wrap header-check" title="Marcado: usa los N camiones, repartidos parejo. Sin marcar: usa solo los que hagan falta (hasta N).">
+              <input type="checkbox" id="usarTodosCamiones">
+              <span class="header-trucks-label">Usar todos</span>
+            </label>
             <button type="button" id="btnOptimize" class="btn-primary btn-compact" title="El ruteo se calcula en Cloudflare Workers (servidor). El navegador no corre el VRP.">Rutear</button>
             <button type="button" id="btnRecalcularRuteo" class="btn btn-compact" title="Elegí qué rutas ya armadas (todavía no salieron) recalcular con el perfil, N° de camiones y clima.">Recalcular</button>
             <button type="button" id="btnReoptMidday" class="btn btn-compact" title="Inserta pedidos nuevos en rutas ya activas sin romper entregas en curso">Re-opt</button>
@@ -5496,7 +5542,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <script id="ordenes-json" type="application/json">[{"ot_id":"OT-PEND-001","cliente":"Cliente Pendiente A","tenant_id":"empresa_demo","trip_id":"","estado_operacional":"PENDIENTE_RUTEO","monto_total":180000,"direccion":"Av. Las Condes 1234, Santiago","lat":-33.41,"lng":-70.55},{"ot_id":"OT-PEND-002","cliente":"Cliente Pendiente B","tenant_id":"empresa_demo","trip_id":null,"estado_operacional":"PENDIENTE_RUTEO","monto_total":95000,"direccion":"Calle Tocopilla 567, Providencia, Santiago","lat":-33.43,"lng":-70.61}]</script>
       <script id="viajes-json" type="application/json">[{"trip_id":"VIAJE-002","chofer":"María González","chofer_id":"CHF-02","detalle_paradas":[{"ot_id":"OT-2001","cliente":"Empresa Gamma","monto_total":200000,"estado_operacional":"EN_RUTA","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":null,"metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"--:--","_eta_str":"10:00","_search_str":"ot-2001 empresa gamma"},{"ot_id":"OT-2002","cliente":"Empresa Delta","monto_total":150000,"estado_operacional":"ENTREGADO","eta":"2025-07-01T16:00:00.000Z","fecha_hora_sla":"2025-07-01T13:00:00.000Z","hora_real":"2025-07-01T12:30:00.000Z","metadata":null,"_fecha_sla_str":"09:00","_hora_real_str":"08:30","_eta_str":"12:00","_search_str":"ot-2002 empresa delta"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-002 maría gonzález ot-2001 empresa gamma ot-2002 empresa delta","km_recorridos":0,"valor_total_viaje":350000,"total_paradas":2,"entregas_completadas":1,"entregas_rechazadas":0,"paradas_atrasadas":0},{"trip_id":"VIAJE-003","chofer":"Pedro Soto","chofer_id":"CHF-03","detalle_paradas":[{"ot_id":"OT-3001","cliente":"Empresa Epsilon","monto_total":100000,"estado_operacional":"ENTREGADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":"2025-07-01T10:00:00.000Z","metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"06:00","_eta_str":"10:00","_search_str":"ot-3001 empresa epsilon"},{"ot_id":"OT-3002","cliente":"Empresa Zeta","monto_total":75000,"estado_operacional":"RECHAZADO","eta":"2025-07-01T14:00:00.000Z","fecha_hora_sla":"2025-07-01T18:00:00.000Z","hora_real":"2025-07-01T11:00:00.000Z","metadata":null,"_fecha_sla_str":"14:00","_hora_real_str":"07:00","_eta_str":"10:00","_search_str":"ot-3002 empresa zeta"}],"_multa_calculada":0,"_riesgo_dinamico":0,"_search_str":"viaje-003 pedro soto ot-3001 empresa epsilon ot-3002 empresa zeta"}]</script>
-      <script id="config-json" type="application/json">{"BODEGA":{"LAT":-33.5132,"LNG":-70.7672,"NOMBRE":"Bodega Central"},"ESTADOS":{"PENDIENTE":"PENDIENTE_RUTEO","ASIGNADO":"CAMION_ASIGNADO","EN_RUTA":"EN_RUTA","ENTREGADO":"ENTREGADO","RECHAZADO":"RECHAZADO","CANCELADO":"CANCELADO_PLANILLA","RETORNO":"RETORNO_BODEGA"},"UI":{"COLORS":{"EXITO":"#10b981","ALERTA":"#ef4444","NEUTRAL":"#2563eb","WARNING":"#f59e0b"}},"WMS":{"ENABLED":false},"tenant_id":"empresa_demo","operator":null,"depots":[],"dte_live":false,"wms_enabled":false,"last_sync_date":null}</script>
+      <script id="config-json" type="application/json">{"BODEGA":{"LAT":-33.5132,"LNG":-70.7672,"NOMBRE":"Bodega Central"},"ESTADOS":{"PENDIENTE":"PENDIENTE_RUTEO","ASIGNADO":"CAMION_ASIGNADO","EN_RUTA":"EN_RUTA","ENTREGADO":"ENTREGADO","RECHAZADO":"RECHAZADO","CANCELADO":"CANCELADO_PLANILLA","RETORNO":"RETORNO_BODEGA"},"UI":{"COLORS":{"EXITO":"#10b981","ALERTA":"#ef4444","NEUTRAL":"#2563eb","WARNING":"#f59e0b"}},"WMS":{"ENABLED":false},"tenant_id":"empresa_demo","operator":null,"depots":[],"dte_live":false,"wms_enabled":false,"MAP_TILES":null,"last_sync_date":null}</script>
       <script id="choferes-json" type="application/json">[{"chofer_id":"CHF-01","nombre_completo":"Juan Pérez Morales","rut":"","gps_interval_seconds":10},{"chofer_id":"CHF-02","nombre_completo":"María González López","rut":"","gps_interval_seconds":30}]</script>
 
         <div id="chatOffcanvas" class="chat-panel">
@@ -5905,36 +5951,6 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           }).join(';');
         }
 
-        function dist2LatLng(a, b) {
-          var dlat = Number(a[0]) - Number(b[0]);
-          var dlng = Number(a[1]) - Number(b[1]);
-          return dlat * dlat + dlng * dlng;
-        }
-
-        function splitSnappedRoundTrip(snapped, lastStop, depot) {
-          if (!Array.isArray(snapped) || snapped.length < 4 || !lastStop) {
-            return { outbound: snapped, ret: null };
-          }
-          var n = snapped.length;
-          var from = Math.max(1, Math.floor(n * 0.08));
-          var to = Math.max(from + 1, Math.floor(n * 0.92));
-          var bestI = from;
-          var best = Infinity;
-          for (var i = from; i < to; i++) {
-            var d = dist2LatLng(snapped[i], lastStop);
-            if (d < best) { best = d; bestI = i; }
-          }
-          if (depot && dist2LatLng(snapped[bestI], depot) < 1e-7) {
-            return { outbound: snapped, ret: null };
-          }
-          var outbound = snapped.slice(0, bestI + 1);
-          var ret = snapped.slice(bestI);
-          if (outbound.length < 2 || ret.length < 2) {
-            return { outbound: snapped, ret: null };
-          }
-          return { outbound: outbound, ret: ret };
-        }
-
         async function fetchSnappedRoute(latlngs, signal) {
           var key = routeGeomKey(latlngs);
           if (routeGeomCache.has(key)) return routeGeomCache.get(key);
@@ -5989,7 +6005,33 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
           try {
             map = L.map('map', { preferCanvas: true, zoomControl: false }).setView([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG], 11);
             L.control.zoom({ position: 'topright' }).addTo(map);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
+            // CARTO sin API key servía tiles borrosas con "API KEY REQUIRED".
+            // El servidor decide: Mapbox vía Worker (URL firmada) u OSM.
+            var tilesCfg = (CONFIG && CONFIG.MAP_TILES) || {
+              url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              attribution: '&copy; OpenStreetMap',
+              maxZoom: 19,
+              maxNativeZoom: 19
+            };
+            var baseLayer = L.tileLayer(tilesCfg.url, {
+              attribution: tilesCfg.attribution,
+              maxZoom: tilesCfg.maxZoom || 19,
+              maxNativeZoom: tilesCfg.maxNativeZoom || tilesCfg.maxZoom || 19
+            }).addTo(map);
+            // La firma vence (24 h): si la Torre queda abierta, pedir una URL nueva
+            // en vez de dejar el mapa en gris.
+            var lastTileRefresh = 0;
+            baseLayer.on('tileerror', function() {
+              if (String(tilesCfg.url || '').indexOf('/api/map-tiles/') !== 0) return;
+              if (Date.now() - lastTileRefresh < 10 * 60 * 1000) return;
+              lastTileRefresh = Date.now();
+              fetch('/api/map-tiles/config', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(cfg) {
+                  if (cfg && cfg.url) { tilesCfg = cfg; baseLayer.setUrl(cfg.url); }
+                })
+                .catch(function() {});
+            });
 
             const bodegaIcon = L.divIcon({ html: '<div style="background:var(--accent); color:white; width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:18px; border:2px solid white; box-shadow:0 4px 6px rgba(0,0,0,0.2);">🏭</div>', className: '', iconSize: [36,36], iconAnchor: [18,18] });
             L.marker([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG], {icon: bodegaIcon}).bindPopup("<b>" + (CONFIG.BODEGA.NOMBRE || "Bodega") + "</b>").addTo(map);
@@ -6164,23 +6206,20 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 return;
               }
 
-              let finalLat = Number(p.lat);
-              let finalLng = Number(p.lng);
-              
+              const finalLat = Number(p.lat);
+              const finalLng = Number(p.lng);
+
               if (isNaN(finalLat) || isNaN(finalLng)) {
                 console.warn("[DEFENSIVO] Parada de viaje omitida por coordenadas NaN:", p);
                 return;
               }
-              
-              const coordKey = finalLat.toFixed(4) + ',' + finalLng.toFixed(4);
-              
-              if (coordOcurrences[coordKey]) {
-                  coordOcurrences[coordKey]++;
-                  finalLat += (Math.random() - 0.5) * 0.002;
-                  finalLng += (Math.random() - 0.5) * 0.002;
-              } else {
-                  coordOcurrences[coordKey] = 1;
-              }
+
+              // La ruta va a la coordenada real. Paradas en el mismo punto se abren
+              // corriendo el ícono (antes se movía el punto al azar: la línea iba a un
+              // lugar inventado, distinto en cada redibujo, y el caché nunca pegaba).
+              const coordKey = finalLat.toFixed(5) + ',' + finalLng.toFixed(5);
+              const dupIdx = coordOcurrences[coordKey] || 0;
+              coordOcurrences[coordKey] = dupIdx + 1;
 
               coordsDirectas.push([finalLat, finalLng]);
               
@@ -6191,8 +6230,10 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               else if (p.estado_operacional === CONFIG.ESTADOS.RECHAZADO) hexColor = CONFIG.UI.COLORS.ALERTA; 
               else if (isLate) hexColor = CONFIG.UI.COLORS.WARNING; 
               
-              const pinHtml = '<div style="background:' + hexColor + '; color:white; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:2px solid white;">' + (index + 1) + '</div>';
-              const marker = L.marker([finalLat, finalLng], {icon: L.divIcon({ html: pinHtml, className: '', iconSize: [26,26], iconAnchor: [13,13] })}).bindPopup('<b>Stop ' + (index+1) + ': ' + escapeHTMLFront(p.cliente) + '</b>');
+              // Mismo número que el panel (stop_sequence), no el índice entre las que tienen coords
+              const seqLabel = escapeHTMLFront(String(p.stop_sequence != null && p.stop_sequence !== '' ? p.stop_sequence : index + 1));
+              const pinHtml = '<div style="background:' + hexColor + '; color:white; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:2px solid white;">' + seqLabel + '</div>';
+              const marker = L.marker([finalLat, finalLng], {icon: L.divIcon({ html: pinHtml, className: '', iconSize: [26,26], iconAnchor: [13 - dupIdx * 16, 13] })}).bindPopup('<b>Parada ' + seqLabel + ': ' + escapeHTMLFront(p.cliente) + '</b>');
               newLayers.push(marker);
             });
 
@@ -6228,33 +6269,36 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             await yieldToUI();
             if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
 
-            var tour = coordsDirectas.slice();
-            if (tour.length >= 1) {
-              var last = tour[tour.length - 1];
-              if (!last || last[0] !== CONFIG.BODEGA.LAT || last[1] !== CONFIG.BODEGA.LNG) {
-                tour.push([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
-              }
-            }
-            if (tour.length >= 2) {
-              var snapped = await fetchSnappedRoute(tour, signal);
+            // Ida (bodega → paradas) y vuelta (última → bodega) en requests separados.
+            // Antes se pedía el circuito entero y se partía adivinando el punto más
+            // cercano a la última parada: la ida y la vuelta quedaban mal cortadas.
+            var depotLL = [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG];
+            var hasDepot = Number.isFinite(depotLL[0]) && Number.isFinite(depotLL[1]);
+            var outboundPts = coordsDirectas.slice();
+            var returnPts = hasDepot && coordsDirectas.length > 1
+              ? [coordsDirectas[coordsDirectas.length - 1], depotLL]
+              : null;
+            if (outboundPts.length >= 2) {
+              var snappedParts = await Promise.all([
+                fetchSnappedRoute(outboundPts, signal),
+                returnPts ? fetchSnappedRoute(returnPts, signal) : Promise.resolve(null)
+              ]);
               if (drawGen !== routeDrawGen || appState.activeTripId !== safeTripId) return;
-              if (snapped && snapped.length > 1) {
-                try { if (outboundLine) layerViajeActivo.removeLayer(outboundLine); } catch (_) {}
+              var snappedOut = snappedParts[0];
+              var snappedRet = snappedParts[1];
+              if (snappedRet && snappedRet.length > 1) {
                 try { if (returnLine) layerViajeActivo.removeLayer(returnLine); } catch (_) {}
-                for (var li = newLayers.length - 1; li >= 0; li--) {
-                  if (newLayers[li] === outboundLine || newLayers[li] === returnLine) newLayers.splice(li, 1);
-                }
-                var lastStop = coordsDirectas[coordsDirectas.length - 1];
-                var depotLL = [CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG];
-                var parts = splitSnappedRoundTrip(snapped, lastStop, depotLL);
-                outboundLine = L.polyline(parts.outbound, streetStyle);
+                if (newLayers.indexOf(returnLine) !== -1) newLayers.splice(newLayers.indexOf(returnLine), 1);
+                returnLine = L.polyline(snappedRet, returnStyle);
+                returnLine.addTo(layerViajeActivo);
+                newLayers.push(returnLine);
+              }
+              if (snappedOut && snappedOut.length > 1) {
+                try { if (outboundLine) layerViajeActivo.removeLayer(outboundLine); } catch (_) {}
+                if (newLayers.indexOf(outboundLine) !== -1) newLayers.splice(newLayers.indexOf(outboundLine), 1);
+                outboundLine = L.polyline(snappedOut, streetStyle);
                 outboundLine.addTo(layerViajeActivo);
                 newLayers.push(outboundLine);
-                if (parts.ret && parts.ret.length > 1) {
-                  returnLine = L.polyline(parts.ret, returnStyle);
-                  returnLine.addTo(layerViajeActivo);
-                  newLayers.push(returnLine);
-                }
                 window._snappedTrips[safeTripId] = true;
                 var snapBounds = L.featureGroup(newLayers).getBounds().extend([CONFIG.BODEGA.LAT, CONFIG.BODEGA.LNG]);
                 if (snapBounds.isValid()) {
@@ -6816,7 +6860,8 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               }
 
               // Override dispatcher: ↑ ↓ mover (paradas abiertas; no canceladas)
-              var isCancelado = String(p.estado_operacional || '').toUpperCase() === 'CANCELADO_PLANILLA';
+              var stUpper = String(p.estado_operacional || '').toUpperCase();
+              var isCancelado = stUpper === 'CANCELADO_PLANILLA' || stUpper === 'RETORNO_BODEGA';
               var overrideBtns = '';
               if (!isEntregado && !isRechazado && !isEnSitio && !isCancelado) {
                 overrideBtns =
@@ -7553,7 +7598,9 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     if (!viaje) return;
                     var abiertas = (viaje.detalle_paradas || []).filter(function(p) {
                       var st = String(p.estado_operacional || '').toUpperCase();
-                      return st !== 'ENTREGADO' && st !== 'RECHAZADO' && st !== 'EN_SITIO' && st !== 'CANCELADO_PLANILLA';
+                      // Mismo criterio que trip-manual.js: congeladas + fuera de ruta no van en ot_ids
+                      return st !== 'ENTREGADO' && st !== 'RECHAZADO' && st !== 'EN_SITIO'
+                        && st !== 'CANCELADO_PLANILLA' && st !== 'RETORNO_BODEGA';
                     });
                     var ids = abiertas.map(function(p) { return String(p.ot_id); });
                     var idx = ids.indexOf(String(otId));
@@ -7830,6 +7877,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     tenant_id: window._TENANT_ID || 'empresa_base',
                     perfil_id: document.getElementById('perfilRuteo').value, 
                     flota_disponible: nCamiones,
+                    usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                     clima: document.getElementById('climaRuteo').value,
                     depot_id: (document.getElementById('depotRuteo') || {}).value || null,
                     is_simulacion: false 
@@ -7840,8 +7888,15 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 if (res.ok && Number(data.viajes_creados || 0) > 0) {
                   var syncOk = document.getElementById('syncStatus');
                   if (syncOk) {
-                    syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados';
+                    syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados' +
+                      (data.camiones_disponibles ? ' (' + data.viajes_creados + ' de ' + data.camiones_disponibles + ' camiones)' : '');
+                    syncOk.title = data.resumen || '';
                     syncOk.style.color = '#86efac';
+                  }
+                  if (Array.isArray(data.sin_asignar_ids) && data.sin_asignar_ids.length) {
+                    setTimeout(function() {
+                      alert('Ruteo listo, pero ' + data.sin_asignar_ids.length + ' OT(s) quedaron sin chofer que las pueda llevar (capacidad, tags o faltan camiones). Siguen en Backlog.');
+                    }, 0);
                   }
                   if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
                   if (busy) busy.textContent = 'Aplicando rutas… el mapa sigue activo.';
@@ -7937,6 +7992,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                     incluir_backlog: incluirBacklog,
                     perfil_id: perfilEl && perfilEl.value,
                     flota_disponible: nCamiones,
+                    usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                     clima: climaEl && climaEl.value,
                     depot_id: (document.getElementById('depotRuteo') || {}).value || null
                   })
@@ -8280,6 +8336,9 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
             document.getElementById('rrCamionListo').checked = draft.camion_listo !== false;
             var nCamEl = document.getElementById('camionesDisponibles');
             if (nCamEl) nCamEl.value = '3';
+            // El video muestra la flota partida en 3: con "hasta N" podría salir 1 camión
+            var usarTodosEl = document.getElementById('usarTodosCamiones');
+            if (usarTodosEl) usarTodosEl.checked = true;
             var perfilEl = document.getElementById('perfilRuteo');
             if (perfilEl) {
               var eq = Array.from(perfilEl.options).find(function(o) {
@@ -8801,6 +8860,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
                 paradas,
                 depot_id: (document.getElementById('depotRuteo') || {}).value || null,
                 flota_disponible: parseInt((document.getElementById('camionesDisponibles') || {}).value, 10) || 1,
+                usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                 perfil_id: (document.getElementById('perfilRuteo') || {}).value || 1,
                 clima: (document.getElementById('climaRuteo') || {}).value || 'NORMAL',
               })

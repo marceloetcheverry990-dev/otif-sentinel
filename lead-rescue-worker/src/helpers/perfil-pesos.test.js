@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { perfilKeyFromNombre, resolvePerfilPesos, PERFIL_PESOS } from './perfil-pesos.js';
+import { perfilKeyFromNombre, resolvePerfilPesos, loadPerfilPesos, PERFIL_PESOS } from './perfil-pesos.js';
 
 describe('resolvePerfilPesos', () => {
   it('mapea los cuatro nombres del dropdown a pesos distintos', () => {
@@ -30,5 +30,56 @@ describe('resolvePerfilPesos', () => {
 
   it('perfilKeyFromNombre default equilibrado', () => {
     expect(perfilKeyFromNombre('')).toBe('equilibrado');
+  });
+
+  it('con la columna modo (mig 029), renombrar un perfil no le cambia el comportamiento', () => {
+    const p = resolvePerfilPesos({ nombre_perfil: 'Clientes Premium', modo: 'vip' });
+    expect(p.key).toBe('vip');
+    expect(p.modo_origen).toBe('bd');
+    expect(resolvePerfilPesos({ nombre_perfil: 'Clientes Premium' }).key).toBe('equilibrado');
+  });
+
+  it('un modo inválido en la BD cae al nombre', () => {
+    const p = resolvePerfilPesos({ nombre_perfil: 'Modo Ahorro Bencina', modo: 'turbo' });
+    expect(p.key).toBe('ahorro');
+    expect(p.modo_origen).toBe('nombre');
+  });
+});
+
+describe('loadPerfilPesos', () => {
+  const supa = (respuestas) => {
+    const pedidas = [];
+    return {
+      pedidas,
+      from: () => {
+        let cols = '';
+        const b = {
+          select: (c) => { cols = c; pedidas.push(c); return b; },
+          eq: () => b,
+          or: () => b,
+          maybeSingle: async () => respuestas(cols),
+        };
+        return b;
+      },
+    };
+  };
+
+  it('lee el modo de la BD', async () => {
+    const s = supa(() => ({ data: { nombre_perfil: 'Clientes Premium', modo: 'vip' }, error: null }));
+    expect((await loadPerfilPesos(s, 't', 3)).key).toBe('vip');
+  });
+
+  it('BD sin columna modo (antes de la 029): reintenta sin ella y deduce del nombre', async () => {
+    const s = supa((cols) => (cols.includes('modo')
+      ? { data: null, error: { message: 'column perfiles_optimizacion.modo does not exist' } }
+      : { data: { nombre_perfil: 'Modo Salvavidas' }, error: null }));
+    const p = await loadPerfilPesos(s, 't', 4);
+    expect(p.key).toBe('salvavidas');
+    expect(s.pedidas).toHaveLength(2);
+  });
+
+  it('sin perfil_id devuelve Equilibrado sin consultar', async () => {
+    const s = supa(() => { throw new Error('no debería consultar'); });
+    expect((await loadPerfilPesos(s, 't', null)).key).toBe('equilibrado');
   });
 });

@@ -4,6 +4,9 @@ const ENV = {
   JWT_SECRET: 'test-jwt-secret-with-enough-bytes-32+',
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_KEY: 'service-key',
+  // Sin DASHBOARD_SECRET la auth de operador responde 503 (mal configurado)
+  // en vez de 401; con él se prueba el caso real: llega sin credenciales.
+  DASHBOARD_SECRET: 'test-dashboard-secret-32-bytes!!',
 };
 
 describe('R4 endpoint guards', () => {

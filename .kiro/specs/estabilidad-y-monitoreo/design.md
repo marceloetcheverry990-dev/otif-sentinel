@@ -1,5 +1,11 @@
 # Technical Design Document: Stability and Monitoring System
 
+> **Nota (2026-09):** el canal de alertas por Telegram de este diseño ya no existe.
+> `sendAlert()` registra cada alerta en el log del Worker y en `alert_history`, y se
+> leen desde `/dashboard/monitoring`. El bot, su token, `SALES_TEAM_CHAT_ID`,
+> `MONITORING_CHAT_ID` y `tg_breaker` se eliminaron (código + migración 030).
+> Las menciones a Telegram más abajo son el diseño original, solo como historia.
+
 ## Overview
 
 ### Purpose

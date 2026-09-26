@@ -83,6 +83,7 @@ export function renderControlTowerDashboard(
     depots: depotsSeguros,
     dte_live: !!(depotOpts && depotOpts.dte_live),
     wms_enabled: !!(depotOpts && depotOpts.wms_enabled),
+    MAP_TILES: (depotOpts && depotOpts.map_tiles) || null,
   };
   const { safeOrdenesJson, safeViajesJson, safeConfigJson, rawChoferesJson } =
     buildJsonBlobs(ordenesSeguras, viajesSeguros, runtimeConfig, listaChoferes, lastSyncDate);
