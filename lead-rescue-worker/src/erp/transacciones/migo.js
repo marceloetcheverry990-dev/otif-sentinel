@@ -6,20 +6,29 @@
 //
 // Clases de movimiento soportadas (las mismas de SAP):
 //   101  Entrada de mercancías por pedido de compra      (+ stock, + recibido en el pedido)
+//   101  Entrada de lo fabricado por orden de producción (+ stock, + entregado en la orden,
+//        y consumo automático 261 de los insumos marcados "desc. automático")
+//   261  Consumo para orden de producción                 (- stock, primero de lo apartado)
 //   501  Entrada sin pedido                               (+ stock)
 //   551  Salida por desguace / merma                      (- stock)
-//   102 / 502 / 552  Anulación de 101 / 501 / 551         (movimiento inverso)
+//   102 / 262 / 502 / 552  Anulación de 101 / 261 / 501 / 551 (movimiento inverso)
 
 import {
   ErpError, fallo, texto, cantidad, fecha,
   siguienteNumero, RANGOS, validarCentro, estadoPedido, operadorDe,
 } from '../core.js';
 import { leerPedido } from './pedido.js';
+import {
+  leerOrden, exigirMovimientos, consumirComponente, devolverComponente,
+  registrarEntregaOrden, cantidadesBackflush, ESTADOS_ORDEN, r3,
+} from '../produccion.js';
 import { isWmsEnabledForTenant, reintentarQuiebres } from '../../helpers/wms-stock.js';
 
 export const CLASES_MOVIMIENTO = Object.freeze({
-  101: { texto: 'EM entrada de mercancías por pedido', signo: +1, anulacion: '102' },
-  102: { texto: 'EM entrada por pedido — anulación', signo: -1 },
+  101: { texto: 'EM entrada de mercancías (pedido u orden de producción)', signo: +1, anulacion: '102' },
+  102: { texto: 'EM entrada — anulación', signo: -1 },
+  261: { texto: 'Consumo para orden de producción', signo: -1, anulacion: '262' },
+  262: { texto: 'Consumo para orden — anulación', signo: +1 },
   501: { texto: 'Entrada sin pedido', signo: +1, anulacion: '502' },
   502: { texto: 'Entrada sin pedido — anulación', signo: -1 },
   551: { texto: 'Salida para desguace', signo: -1, anulacion: '552' },
@@ -89,12 +98,15 @@ async function crearCabecera(client, tenant_id, { fechaContab, textoCab, operato
 async function insertarPosicion(client, tenant_id, mblnr, p) {
   await client.query(
     `INSERT INTO erp_documentos_material_pos (tenant_id, mblnr, zeile, clase_movimiento, sku, cantidad, unidad,
-                                              centro, ebeln, ebelp, importe, ref_mblnr, ref_zeile)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+                                              centro, ebeln, ebelp, importe, ref_mblnr, ref_zeile, aufnr, rspos)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
     [tenant_id, mblnr, p.zeile, p.clase, p.sku, p.cantidad, p.unidad, p.centro,
-      p.ebeln ?? null, p.ebelp ?? null, p.importe, p.ref_mblnr ?? null, p.ref_zeile ?? null]
+      p.ebeln ?? null, p.ebelp ?? null, p.importe, p.ref_mblnr ?? null, p.ref_zeile ?? null,
+      p.aufnr ?? null, p.rspos ?? null]
   );
 }
+
+const importeDe = (q, precio) => Math.round(Number(q) * Number(precio || 0) * 100) / 100;
 
 async function leerDocumento(client, tenant_id, mblnr, { paraActualizar = false } = {}) {
   const id = texto(mblnr, { campo: 'Documento de material', max: 10, requerido: true });
@@ -190,7 +202,83 @@ async function movimientoLibre(client, tenant_id, body, cab, clase) {
   return { mblnr, posiciones: zeile };
 }
 
-// ─── Anulación (102 / 502 / 552) ───────────────────────────────────────────
+// ─── 261: consumo para orden de producción ────────────────────────────────
+async function consumoParaOrden(client, tenant_id, body, cab) {
+  const orden = await leerOrden(client, tenant_id, body.orden, { paraActualizar: true });
+  exigirMovimientos(orden.cabecera);
+  const { aufnr } = orden.cabecera;
+  const porPos = new Map(orden.componentes.map((c) => [Number(c.posicion), c]));
+  const lineas = (Array.isArray(body.posiciones) ? body.posiciones : [])
+    .filter((l) => l && (l.ok === true || l.ok === 'true'));
+  if (!lineas.length) throw fallo('Marque al menos un componente como OK');
+  if (lineas.length > MAX_POSICIONES) throw fallo(`Máximo ${MAX_POSICIONES} posiciones`);
+
+  const mblnr = await crearCabecera(client, tenant_id, cab);
+  let zeile = 0;
+  const vistos = new Set();
+  const excedidos = [];
+  for (const l of lineas) {
+    const pos = Number(l.rspos);
+    const comp = porPos.get(pos);
+    if (!comp) throw fallo(`La orden ${aufnr} no tiene un componente en la posición ${l.rspos}`);
+    if (vistos.has(pos)) throw fallo(`La posición ${pos} está repetida`);
+    vistos.add(pos);
+    const q = cantidad(l.cantidad, { campo: `Cantidad pos. ${pos}` });
+    const pendiente = Math.max(Number(comp.cantidad_necesaria) - Number(comp.cantidad_retirada), 0);
+    if (q > pendiente + 1e-9) excedidos.push(comp.sku);
+    zeile += 1;
+    await consumirComponente(client, { tenant_id, orden, comp, q, mblnr });
+    await insertarPosicion(client, tenant_id, mblnr, {
+      zeile, clase: '261', sku: comp.sku, cantidad: q, unidad: comp.unidad, centro: comp.centro,
+      aufnr, rspos: pos, importe: importeDe(q, comp.precio_estandar),
+    });
+  }
+  return {
+    mblnr,
+    posiciones: zeile,
+    aviso: excedidos.length ? `se consumió más de lo previsto en ${excedidos.join(', ')}` : null,
+  };
+}
+
+// ─── 101: entrada de lo fabricado (con descuento automático de insumos) ────
+async function entradaPorOrden(client, tenant_id, body, cab) {
+  const orden = await leerOrden(client, tenant_id, body.orden, { paraActualizar: true });
+  exigirMovimientos(orden.cabecera);
+  const c = orden.cabecera;
+  const q = cantidad(body.cantidad, { campo: 'Cantidad' });
+  const pendiente = r3(Number(c.cantidad) - Number(c.cantidad_entregada));
+  if (q > pendiente + 1e-9) {
+    throw fallo(`La cantidad ${q} excede lo pendiente de la orden ${c.aufnr} (${Math.max(pendiente, 0)} ${c.unidad})`);
+  }
+  const final = body.entrega_final === true || body.entrega_final === 'true';
+
+  const mblnr = await crearCabecera(client, tenant_id, cab);
+  let zeile = 1;
+  await moverStock(client, { tenant_id, centro: c.centro, sku: c.sku, delta: q, clase: '101', mblnr });
+  await insertarPosicion(client, tenant_id, mblnr, {
+    zeile, clase: '101', sku: c.sku, cantidad: q, unidad: c.unidad, centro: c.centro,
+    aufnr: c.aufnr, importe: importeDe(q, c.precio_estandar),
+  });
+  // Descuento automático: calculado sobre la cantidad total ANTES de marcar la entrega.
+  const automaticos = cantidadesBackflush(orden.componentes, q, c.cantidad);
+  for (const { comp, cantidad: qc } of automaticos) {
+    zeile += 1;
+    await consumirComponente(client, { tenant_id, orden, comp, q: qc, mblnr });
+    await insertarPosicion(client, tenant_id, mblnr, {
+      zeile, clase: '261', sku: comp.sku, cantidad: qc, unidad: comp.unidad, centro: comp.centro,
+      aufnr: c.aufnr, rspos: Number(comp.posicion), importe: importeDe(qc, comp.precio_estandar),
+    });
+  }
+  const estado = await registrarEntregaOrden(client, tenant_id, orden, { delta: q, entregaFinal: final ? true : null });
+  return {
+    mblnr,
+    posiciones: zeile,
+    aviso: `orden ${c.aufnr}: ${estado} ${ESTADOS_ORDEN[estado]}` +
+      (automaticos.length ? ` · ${automaticos.length} insumo(s) descontados automáticamente` : ''),
+  };
+}
+
+// ─── Anulación (102 / 262 / 502 / 552) ─────────────────────────────────────
 async function anular(client, tenant_id, body, cab) {
   const doc = await leerDocumento(client, tenant_id, body.documento, { paraActualizar: true });
   if (doc.cabecera.anulado_por) {
@@ -199,6 +287,14 @@ async function anular(client, tenant_id, body, cab) {
   const noAnulable = doc.posiciones.find((p) => !CLASES_MOVIMIENTO[p.clase_movimiento]?.anulacion);
   if (noAnulable) {
     throw fallo(`La clase de movimiento ${noAnulable.clase_movimiento} no se puede anular`);
+  }
+
+  // Órdenes de producción que toca el documento: tienen que seguir abiertas.
+  const ordenes = new Map();
+  for (const aufnr of new Set(doc.posiciones.map((p) => p.aufnr).filter(Boolean))) {
+    const orden = await leerOrden(client, tenant_id, aufnr, { paraActualizar: true });
+    exigirMovimientos(orden.cabecera);
+    ordenes.set(aufnr, orden);
   }
 
   const mblnr = await crearCabecera(client, tenant_id, {
@@ -212,9 +308,21 @@ async function anular(client, tenant_id, body, cab) {
     const claseOriginal = CLASES_MOVIMIENTO[p.clase_movimiento];
     const claseInv = claseOriginal.anulacion;
     const q = Number(p.cantidad);
-    await moverStock(client, {
-      tenant_id, centro: p.centro, sku: p.sku, delta: -claseOriginal.signo * q, clase: claseInv, mblnr,
-    });
+    const orden = p.aufnr ? ordenes.get(p.aufnr) : null;
+    if (orden && p.clase_movimiento === '261') {
+      // 262: el insumo vuelve a lo apartado para la orden (si todavía lo necesita) o a libre.
+      const comp = orden.componentes.find((x) => Number(x.posicion) === Number(p.rspos));
+      if (!comp) throw fallo(`La orden ${p.aufnr} ya no tiene el componente de la posición ${p.rspos}`);
+      await devolverComponente(client, { tenant_id, orden, comp, q, mblnr });
+    } else {
+      await moverStock(client, {
+        tenant_id, centro: p.centro, sku: p.sku, delta: -claseOriginal.signo * q, clase: claseInv, mblnr,
+      });
+    }
+    if (orden && p.clase_movimiento === '101') {
+      // 102: la orden deja de tener esa entrega (y pierde la marca de entrega final).
+      await registrarEntregaOrden(client, tenant_id, orden, { delta: -q, entregaFinal: false });
+    }
     if (p.ebeln) {
       await client.query(
         `UPDATE erp_pedidos_compra_pos SET cantidad_recibida = GREATEST(cantidad_recibida - $4, 0)
@@ -226,6 +334,7 @@ async function anular(client, tenant_id, body, cab) {
     await insertarPosicion(client, tenant_id, mblnr, {
       zeile, clase: claseInv, sku: p.sku, cantidad: q, unidad: p.unidad, centro: p.centro,
       ebeln: p.ebeln, ebelp: p.ebelp, importe: Number(p.importe), ref_mblnr: p.mblnr, ref_zeile: p.zeile,
+      aufnr: p.aufnr, rspos: p.rspos,
     });
   }
   await client.query(
@@ -241,7 +350,8 @@ async function anular(client, tenant_id, body, cab) {
 
 // Clases que suben stock libre: tras contabilizarlas se reintenta reservar los
 // pedidos de venta de la Torre que estaban en QUIEBRE esperando esos materiales.
-const CLASES_ENTRADA = ['101', '501', '552', '701'];
+// (262 también: lo devuelto que la orden ya no necesita vuelve a libre.)
+const CLASES_ENTRADA = ['101', '262', '501', '552', '701'];
 
 async function liberarQuiebres(client, env, tenant_id, mblnr) {
   if (!(await isWmsEnabledForTenant(client, env, tenant_id))) return [];
@@ -267,7 +377,8 @@ export const MIGO = {
   async get({ client, tenant_id, params }) {
     if (params.documento) return { documento: await leerDocumento(client, tenant_id, params.documento) };
     if (params.pedido) return { pedido: await leerPedido(client, tenant_id, params.pedido) };
-    throw fallo('Indique un pedido o un documento de material');
+    if (params.orden) return { orden: await leerOrden(client, tenant_id, params.orden) };
+    throw fallo('Indique un pedido, una orden o un documento de material');
   },
   async post({ client, tenant_id, body, operator, env }) {
     const cab = {
@@ -280,14 +391,16 @@ export const MIGO = {
       r = await anular(client, tenant_id, body, cab);
     } else {
       const clase = String(body.clase_movimiento || '');
-      if (clase === '101') r = await entradaPorPedido(client, tenant_id, body, cab);
+      if (clase === '101' && body.orden) r = await entradaPorOrden(client, tenant_id, body, cab);
+      else if (clase === '101') r = await entradaPorPedido(client, tenant_id, body, cab);
+      else if (clase === '261') r = await consumoParaOrden(client, tenant_id, body, cab);
       else if (clase === '501' || clase === '551') r = await movimientoLibre(client, tenant_id, body, cab, clase);
       else throw fallo(`Clase de movimiento ${clase || '(vacía)'} no soportada en MIGO`);
     }
     const liberadas = await liberarQuiebres(client, env, tenant_id, r.mblnr);
-    const extra = liberadas.length
+    const extra = (r.aviso ? ` · ${r.aviso}` : '') + (liberadas.length
       ? ` · ${liberadas.length} pedido(s) de venta liberado(s) de quiebre: ${liberadas.slice(0, 5).join(', ')}${liberadas.length > 5 ? '…' : ''}`
-      : '';
+      : '');
     if (body.solo_verificar) {
       throw new Verificado(`Verificación correcta: ${r.posiciones} posición(es) se pueden contabilizar${extra.replace('liberado(s)', 'se liberarían')}`);
     }
@@ -297,22 +410,25 @@ export const MIGO = {
     return { mensaje, documento: r.mblnr, liberadas, invalidarTorre: true };
   },
   screen: `function (ui, params) {
+    var operacionInicial = params.documento ? 'A04' : (params.operacion || 'A01');
     var estado = {
-      operacion: params.documento ? 'A04' : (params.operacion || 'A01'),
-      referencia: params.documento ? 'R02' : (params.referencia || 'R01'),
+      operacion: operacionInicial,
+      referencia: params.documento ? 'R02' : (params.referencia || (operacionInicial === 'A07' ? 'R10' : 'R01')),
       datos: null,
     };
 
     function cabecera() {
       var opOpciones = [['A01', 'A01 Entrada de mercancías'], ['A07', 'A07 Salida de mercancías'], ['A03', 'A03 Anulación'], ['A04', 'A04 Visualizar']];
       var refOpciones = estado.operacion === 'A01'
-        ? [['R01', 'R01 Pedido'], ['R10', 'R10 Otros']]
-        : estado.operacion === 'A07' ? [['R10', 'R10 Otros']] : [['R02', 'R02 Documento material']];
+        ? [['R01', 'R01 Pedido'], ['R08', 'R08 Orden'], ['R10', 'R10 Otros']]
+        : estado.operacion === 'A07' ? [['R08', 'R08 Orden'], ['R10', 'R10 Otros']] : [['R02', 'R02 Documento material']];
       var html = '<div class="erp-migo-barra">' +
         ui.campo({ id: 'operacion', etiqueta: 'Operación', tipo: 'select', opciones: opOpciones, valor: estado.operacion }) +
         ui.campo({ id: 'referencia', etiqueta: 'Referencia', tipo: 'select', opciones: refOpciones, valor: estado.referencia });
       if (estado.operacion === 'A01' && estado.referencia === 'R01') {
         html += ui.campo({ id: 'pedido', etiqueta: 'Pedido', f4: 'pedido', valor: estado.datos && estado.datos.pedido ? estado.datos.pedido.cabecera.ebeln : (params.pedido || '') });
+      } else if (estado.referencia === 'R08') {
+        html += ui.campo({ id: 'orden', etiqueta: 'Orden', f4: 'orden', valor: estado.datos && estado.datos.orden ? estado.datos.orden.cabecera.aufnr : (params.orden || '') });
       } else if (estado.operacion === 'A03' || estado.operacion === 'A04') {
         html += ui.campo({ id: 'documento', etiqueta: 'Doc. material', valor: estado.datos && estado.datos.documento ? estado.datos.documento.cabecera.mblnr : (params.documento || '') });
       }
@@ -321,8 +437,8 @@ export const MIGO = {
     }
 
     function claseActual() {
-      if (estado.operacion === 'A01') return estado.referencia === 'R01' ? '101' : '501';
-      if (estado.operacion === 'A07') return '551';
+      if (estado.operacion === 'A01') return estado.referencia === 'R10' ? '501' : '101';
+      if (estado.operacion === 'A07') return estado.referencia === 'R08' ? '261' : '551';
       return '';
     }
 
@@ -350,6 +466,56 @@ export const MIGO = {
             '<td>' + ui.esc(pos.unidad) + '</td><td>' + ui.esc(pos.centro) + '</td></tr>';
         }).join('') + '</tbody></table>' +
         '<p class="erp-ayuda">Marque <b>OK</b> en las posiciones que llegaron y ajuste la cantidad si llegó menos.</p>');
+    }
+
+    // A01 + R08: entrada de lo fabricado. Muestra cuánto falta y qué insumos se descontarán solos.
+    function posicionesOrdenEntrada(o) {
+      var c = o.cabecera;
+      var pendiente = Math.max(Number(c.cantidad) - Number(c.cantidad_entregada), 0);
+      var auto = o.componentes.filter(function (x) { return x.backflush; });
+      return ui.grupo('Orden ' + c.aufnr + ' — ' + c.sku + ' ' + (c.nombre || '') + ' (' + c.estado + ')',
+        ui.campo({ id: 'plan', etiqueta: 'Cantidad total', valor: ui.num(c.cantidad) + ' ' + c.unidad, soloLectura: true }) +
+        ui.campo({ id: 'ya', etiqueta: 'Ya entregado', valor: ui.num(c.cantidad_entregada), soloLectura: true }) +
+        ui.campo({ id: 'cantidad_em', etiqueta: 'Cantidad fabricada', tipo: 'number', obligatorio: true, valor: pendiente > 0 ? ui.num(pendiente) : '', ancho: 10 }) +
+        ui.campo({ id: 'entrega_final', etiqueta: 'Entrega final (no se fabricará más)', tipo: 'check', valor: false }) +
+        (auto.length
+          ? '<p class="erp-ayuda">Al contabilizar se descuentan solos estos insumos (clase 261):</p>' +
+            '<table class="erp-tabla"><thead><tr><th>Pos.</th><th>Insumo</th><th>Texto breve</th><th class="erp-num">Se descuenta</th><th>UM</th></tr></thead><tbody>' +
+            auto.map(function (x) {
+              return '<tr><td class="erp-num">' + x.posicion + '</td><td>' + ui.esc(x.sku) + '</td><td>' + ui.esc(x.texto_breve || '') + '</td>' +
+                '<td class="erp-num" data-auto="' + x.posicion + '"></td><td>' + ui.esc(x.unidad) + '</td></tr>';
+            }).join('') + '</tbody></table>'
+          : '<p class="erp-ayuda">Ningún insumo de esta orden se descuenta solo: entréguelos con A07 Salida + R08 Orden (clase 261).</p>'));
+    }
+    function recalcularAuto() {
+      var o = estado.datos && estado.datos.orden;
+      if (!o || estado.operacion !== 'A01') return;
+      var q = ui.numeroCL((ui.valores().cantidad_em) || '0');
+      o.componentes.forEach(function (x) {
+        var celda = ui.q('[data-auto="' + x.posicion + '"]');
+        if (celda) celda.textContent = isFinite(q) ? ui.num(Math.round(Number(x.cantidad_necesaria) * q / Number(o.cabecera.cantidad) * 1000) / 1000) : '';
+      });
+    }
+
+    // A07 + R08: consumo de insumos para la orden (bodega los entrega).
+    function posicionesOrdenConsumo(o) {
+      var c = o.cabecera;
+      return ui.grupo('Componentes de la orden ' + c.aufnr + ' — ' + c.sku + ' ' + (c.nombre || '') + ' (' + c.estado + ')',
+        '<table class="erp-tabla erp-tabla-editable"><thead><tr><th>OK</th><th>Pos.</th><th>Insumo</th><th>Texto breve</th><th>Necesario</th><th>Consumido</th><th>Por consumir</th><th>Cantidad</th><th>UM</th><th>Desc. automático</th></tr></thead><tbody>' +
+        o.componentes.map(function (x, i) {
+          var pend = Math.max(Number(x.pendiente), 0);
+          return '<tr' + (pend <= 0 ? ' class="erp-fila-inactiva"' : '') + '>' +
+            '<td>' + ui.celda({ fila: i, col: 'ok', tipo: 'check', valor: false }) +
+              '<input type="hidden" data-fila="' + i + '" data-col="rspos" value="' + x.posicion + '"></td>' +
+            '<td class="erp-num">' + x.posicion + '</td>' +
+            '<td>' + ui.esc(x.sku) + '</td><td>' + ui.esc(x.texto_breve || '') + '</td>' +
+            '<td class="erp-num">' + ui.num(x.cantidad_necesaria) + '</td>' +
+            '<td class="erp-num">' + ui.num(x.cantidad_retirada) + '</td>' +
+            '<td class="erp-num">' + ui.num(pend) + '</td>' +
+            '<td>' + ui.celda({ fila: i, col: 'cantidad', tipo: 'number', valor: pend > 0 ? ui.num(pend) : '', ancho: 8 }) + '</td>' +
+            '<td>' + ui.esc(x.unidad) + '</td><td>' + (x.backflush ? '✔' : '') + '</td></tr>';
+        }).join('') + '</tbody></table>' +
+        '<p class="erp-ayuda">Marque <b>OK</b> en lo que bodega entrega a producción. Los insumos con <b>desc. automático</b> se descuentan solos al dar entrada a lo fabricado: no los entregue dos veces.</p>');
     }
 
     function posicionesLibres() {
@@ -380,26 +546,32 @@ export const MIGO = {
           { id: 'centro', etiqueta: 'Centro' },
           { id: 'ebeln', etiqueta: 'Pedido', enlace: function (f) { if (f.ebeln) ui.ir('ME23N', { pedido: f.ebeln }); } },
           { id: 'ebelp', etiqueta: 'Pos.' },
+          { id: 'aufnr', etiqueta: 'Orden', enlace: function (f) { if (f.aufnr) ui.ir('CO03', { orden: f.aufnr }); } },
           { id: 'importe', etiqueta: 'Importe', tipo: 'money' },
           { id: 'ref_mblnr', etiqueta: 'Doc. referencia' },
         ], d.posiciones));
     }
 
     function render() {
+      var libre = estado.referencia === 'R10' && (estado.operacion === 'A07' || estado.operacion === 'A01');
       var cuerpo = '';
       if (estado.datos && estado.datos.pedido) cuerpo = posicionesPedido(estado.datos.pedido);
+      else if (estado.datos && estado.datos.orden) cuerpo = estado.operacion === 'A01' ? posicionesOrdenEntrada(estado.datos.orden) : posicionesOrdenConsumo(estado.datos.orden);
       else if (estado.datos && estado.datos.documento) cuerpo = posicionesDocumento(estado.datos.documento);
-      else if (estado.operacion === 'A07' || (estado.operacion === 'A01' && estado.referencia === 'R10')) cuerpo = posicionesLibres();
+      else if (libre) cuerpo = posicionesLibres();
       else cuerpo = '<p class="erp-ayuda">Ingrese la referencia y presione Enter (Ejecutar).</p>';
 
-      ui.pantalla(cabecera() + (estado.datos || estado.operacion === 'A07' || estado.referencia === 'R10' ? datosCabecera() : '') + cuerpo);
+      ui.pantalla(cabecera() + (estado.datos || libre ? datosCabecera() : '') + cuerpo);
       ui.q('[data-campo="operacion"]').addEventListener('change', function (e) { estado.operacion = e.target.value; estado.referencia = e.target.value === 'A01' ? 'R01' : (e.target.value === 'A07' ? 'R10' : 'R02'); estado.datos = null; params = {}; render(); });
       ui.q('[data-campo="referencia"]').addEventListener('change', function (e) { estado.referencia = e.target.value; estado.datos = null; params = {}; render(); });
+      var campoCantidad = ui.q('[data-campo="cantidad_em"]');
+      if (campoCantidad) { campoCantidad.addEventListener('input', recalcularAuto); recalcularAuto(); }
 
       var b = [];
-      var puedeContabilizar = (estado.datos && estado.datos.pedido) || estado.operacion === 'A07' || (estado.operacion === 'A01' && estado.referencia === 'R10') ||
+      var ordenAbierta = estado.datos && estado.datos.orden && ['REL', 'PDLV', 'DLV'].indexOf(estado.datos.orden.cabecera.estado) >= 0;
+      var puedeContabilizar = (estado.datos && estado.datos.pedido) || ordenAbierta || libre ||
         (estado.operacion === 'A03' && estado.datos && estado.datos.documento && !estado.datos.documento.cabecera.anulado_por);
-      if (!estado.datos && (estado.referencia === 'R01' || estado.operacion === 'A03' || estado.operacion === 'A04')) {
+      if (!estado.datos && (estado.referencia === 'R01' || estado.referencia === 'R08' || estado.operacion === 'A03' || estado.operacion === 'A04')) {
         b.push({ texto: 'Ejecutar', tecla: 'Enter', primario: true, accion: cargar });
       }
       if (puedeContabilizar) {
@@ -416,6 +588,11 @@ export const MIGO = {
         if (!v.pedido) return ui.mensaje('E', 'Introduzca un pedido');
         estado.datos = await ui.get('MIGO', { pedido: v.pedido });
         if (estado.datos.pedido.cabecera.estado === 'CERRADO') ui.mensaje('W', 'El pedido ' + v.pedido + ' ya está completamente entregado');
+      } else if (estado.referencia === 'R08') {
+        if (!v.orden) return ui.mensaje('E', 'Introduzca una orden');
+        estado.datos = await ui.get('MIGO', { orden: v.orden });
+        var co = estado.datos.orden.cabecera;
+        if (['REL', 'PDLV', 'DLV'].indexOf(co.estado) < 0) ui.mensaje('W', 'La orden ' + co.aufnr + ' está en ' + co.estado + ' ' + co.texto_estado + ': no admite movimientos');
       } else {
         if (!v.documento) return ui.mensaje('E', 'Introduzca un documento de material');
         estado.datos = await ui.get('MIGO', { documento: v.documento });
@@ -434,6 +611,15 @@ export const MIGO = {
       if (estado.operacion === 'A03') {
         body.operacion = 'anular';
         body.documento = estado.datos.documento.cabecera.mblnr;
+      } else if (estado.datos && estado.datos.orden) {
+        body.clase_movimiento = claseActual();
+        body.orden = estado.datos.orden.cabecera.aufnr;
+        if (estado.operacion === 'A01') {
+          body.cantidad = v.cantidad_em;
+          body.entrega_final = v.entrega_final;
+        } else {
+          body.posiciones = ui.filas();
+        }
       } else {
         body.clase_movimiento = claseActual();
         body.posiciones = ui.filas();
@@ -445,7 +631,7 @@ export const MIGO = {
     }
 
     render();
-    if (params.pedido || params.documento) cargar();
+    if (params.pedido || params.documento || params.orden) cargar();
   }`,
 };
 

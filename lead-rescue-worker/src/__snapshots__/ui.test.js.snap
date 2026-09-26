@@ -4537,6 +4537,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               var cls = s.stock_bajo ? ' bodega-row-warn' : '';
               return '<tr class="' + cls + '"><td>' + esc(s.sku) + '</td><td>' + esc(s.nombre || '') +
                 '</td><td>' + qty(s.qty_disponible) + '</td><td>' + qty(s.qty_reservada) +
+                (Number(s.qty_reservada_produccion) > 0 ? ' <span class="bodega-muted" title="Apartado para órdenes de producción (ERP)">+' + qty(s.qty_reservada_produccion) + ' prod.</span>' : '') +
                 '</td><td>' + qty(s.qty_minima) + '</td><td>' + esc(s.ubicacion || '—') + '</td></tr>';
             }).join('');
 
@@ -9104,6 +9105,7 @@ exports[`renderControlTowerDashboard — Snapshot Fase 0 > snapshot — output b
               var cls = s.stock_bajo ? ' bodega-row-warn' : '';
               return '<tr class="' + cls + '"><td>' + esc(s.sku) + '</td><td>' + esc(s.nombre || '') +
                 '</td><td>' + qty(s.qty_disponible) + '</td><td>' + qty(s.qty_reservada) +
+                (Number(s.qty_reservada_produccion) > 0 ? ' <span class="bodega-muted" title="Apartado para órdenes de producción (ERP)">+' + qty(s.qty_reservada_produccion) + ' prod.</span>' : '') +
                 '</td><td>' + qty(s.qty_minima) + '</td><td>' + esc(s.ubicacion || '—') + '</td></tr>';
             }).join('');
 

@@ -12,8 +12,10 @@ import pedido from './transacciones/pedido.js';
 import migo from './transacciones/migo.js';
 import stock from './transacciones/stock.js';
 import inventario from './transacciones/inventario.js';
+import listaMateriales from './transacciones/lista-materiales.js';
+import ordenProduccion from './transacciones/orden-produccion.js';
 
-const MODULOS = [material, proveedor, pedido, migo, stock, inventario];
+const MODULOS = [material, proveedor, pedido, migo, stock, inventario, listaMateriales, ordenProduccion];
 
 export const TRANSACCIONES = Object.freeze(
   Object.fromEntries(MODULOS.flat().map((tx) => [tx.code, tx]))
@@ -84,6 +86,18 @@ export const AYUDAS_F4 = {
        FROM erp_inventario_fisico
        WHERE tenant_id = $1 AND ($2 = '' OR iblnr ILIKE $3 OR texto ILIKE $3)
        ORDER BY (estado = 'CONTABILIZADO'), iblnr DESC LIMIT 50`,
+      [tenant_id, q, `%${q}%`]
+    );
+    return r.rows;
+  },
+  async orden(client, tenant_id, q) {
+    const r = await client.query(
+      `SELECT o.aufnr AS valor, o.sku || COALESCE(' ' || p.nombre, '') || ' · ' || o.estado || ' · '
+              || o.cantidad_entregada::text || '/' || o.cantidad::text || ' ' || o.unidad AS texto
+       FROM erp_ordenes_produccion o
+       LEFT JOIN productos p ON p.tenant_id = o.tenant_id AND p.sku = o.sku
+       WHERE o.tenant_id = $1 AND ($2 = '' OR o.aufnr ILIKE $3 OR o.sku ILIKE $3 OR p.nombre ILIKE $3)
+       ORDER BY (o.estado IN ('TECO', 'DLFL')), o.aufnr DESC LIMIT 50`,
       [tenant_id, q, `%${q}%`]
     );
     return r.rows;

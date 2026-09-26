@@ -34,7 +34,8 @@ export async function leerInventario(client, tenant_id, iblnr, { paraActualizar 
     `SELECT x.zeile, x.sku, p.nombre AS texto_breve, COALESCE(p.unidad, 'UN') AS unidad,
             COALESCE(p.precio_estandar, 0) AS precio_estandar,
             x.cantidad_contada, x.contado_por, x.contado_at, x.qty_libro, x.diferencia,
-            COALESCE(i.qty_disponible, 0) AS libre, COALESCE(i.qty_reservada, 0) AS reservado
+            COALESCE(i.qty_disponible, 0) AS libre,
+            COALESCE(i.qty_reservada, 0) + COALESCE(i.qty_reservada_produccion, 0) AS reservado
      FROM erp_inventario_fisico_pos x
      LEFT JOIN productos p ON p.tenant_id = x.tenant_id AND p.sku = x.sku
      LEFT JOIN inventario_bodega i ON i.tenant_id = x.tenant_id AND i.depot_id = $3 AND i.sku = x.sku
@@ -304,9 +305,9 @@ export const MI20 = {
     const r = await client.query(
       `SELECT f.iblnr, f.centro, f.estado, x.zeile, x.sku, p.nombre AS texto_breve, COALESCE(p.unidad, 'UN') AS unidad,
               x.cantidad_contada,
-              COALESCE(i.qty_disponible, 0) + COALESCE(i.qty_reservada, 0) AS libro,
-              x.cantidad_contada - (COALESCE(i.qty_disponible, 0) + COALESCE(i.qty_reservada, 0)) AS diferencia,
-              ROUND((x.cantidad_contada - (COALESCE(i.qty_disponible, 0) + COALESCE(i.qty_reservada, 0)))
+              COALESCE(i.qty_disponible, 0) + COALESCE(i.qty_reservada, 0) + COALESCE(i.qty_reservada_produccion, 0) AS libro,
+              x.cantidad_contada - (COALESCE(i.qty_disponible, 0) + COALESCE(i.qty_reservada, 0) + COALESCE(i.qty_reservada_produccion, 0)) AS diferencia,
+              ROUND((x.cantidad_contada - (COALESCE(i.qty_disponible, 0) + COALESCE(i.qty_reservada, 0) + COALESCE(i.qty_reservada_produccion, 0)))
                     * COALESCE(p.precio_estandar, 0), 2) AS valor_diferencia
        FROM erp_inventario_fisico f
        JOIN erp_inventario_fisico_pos x ON x.tenant_id = f.tenant_id AND x.iblnr = f.iblnr
@@ -369,7 +370,7 @@ export const MI07 = {
     let valor = 0;
     for (const p of d.posiciones) {
       const inv = await client.query(
-        `SELECT qty_disponible, qty_reservada FROM inventario_bodega
+        `SELECT qty_disponible, qty_reservada + qty_reservada_produccion AS qty_reservada FROM inventario_bodega
          WHERE tenant_id = $1 AND depot_id = $2 AND sku = $3 FOR UPDATE`,
         [tenant_id, c.centro, p.sku]
       );
@@ -379,7 +380,7 @@ export const MI07 = {
       const dif = r3(Number(p.cantidad_contada) - libro);
 
       if (dif < 0 && -dif > libre + 1e-9) {
-        throw fallo(`Pos. ${p.zeile} (${p.sku}): faltan ${-dif} pero solo hay ${libre} libres; ${reservado} están reservados por la Torre para pedidos de venta. Revise esos pedidos (o recuente) antes de contabilizar.`);
+        throw fallo(`Pos. ${p.zeile} (${p.sku}): faltan ${-dif} pero solo hay ${libre} libres; ${reservado} están reservados (pedidos de venta de la Torre u órdenes de producción liberadas). Revise esos pedidos u órdenes (o recuente) antes de contabilizar.`);
       }
       if (dif !== 0) {
         if (!mblnr) {

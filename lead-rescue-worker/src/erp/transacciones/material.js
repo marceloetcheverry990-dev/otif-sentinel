@@ -29,7 +29,7 @@ const MENU = ['Logística', 'Gestión de materiales', 'Maestro de materiales'];
 async function detalleMaterial(client, tenant_id, sku) {
   const mat = await leerMaterial(client, tenant_id, sku);
   const centros = await client.query(
-    `SELECT i.depot_id AS centro, d.nombre AS nombre_centro, i.qty_disponible, i.qty_reservada,
+    `SELECT i.depot_id AS centro, d.nombre AS nombre_centro, i.qty_disponible, i.qty_reservada, i.qty_reservada_produccion,
             i.qty_minima, i.ubicacion
      FROM inventario_bodega i
      LEFT JOIN depots d ON d.tenant_id = i.tenant_id AND d.depot_id = i.depot_id
@@ -114,7 +114,8 @@ const PANTALLA_MATERIAL = `function (ui, params, modo) {
           { id: 'centro', etiqueta: 'Centro' },
           { id: 'nombre_centro', etiqueta: 'Nombre' },
           { id: 'qty_disponible', etiqueta: 'Libre utilización', tipo: 'qty' },
-          { id: 'qty_reservada', etiqueta: 'Reservado', tipo: 'qty' },
+          { id: 'qty_reservada', etiqueta: 'Reservado (Torre)', tipo: 'qty' },
+          { id: 'qty_reservada_produccion', etiqueta: 'Reservado producción', tipo: 'qty' },
           { id: 'qty_minima', etiqueta: 'Punto de pedido', tipo: 'qty' },
           { id: 'ubicacion', etiqueta: 'Ubicación' },
         ], centros)

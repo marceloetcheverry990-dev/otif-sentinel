@@ -1,6 +1,6 @@
-# ERP módulo MM — Guía de uso y de extensión
+# ERP módulos MM y PP — Guía de uso y de extensión
 
-Un ERP tipo SAP, módulo **MM (Gestión de materiales)**, conectado a la Torre de Control.
+Un ERP tipo SAP con los módulos **MM (Gestión de materiales)** y **PP (Producción)**, conectado a la Torre de Control.
 Usa los mismos códigos de transacción, clases de movimiento y nombres que SAP, así que lo que
 aprendas acá te sirve en un SAP real.
 
@@ -22,14 +22,20 @@ aprendas acá te sirve en un SAP real.
 | Clase de movimiento | `clase_movimiento` | Código de 3 dígitos que dice qué tipo de movimiento fue (tabla abajo) |
 | Stock libre utilización | `inventario_bodega.qty_disponible` | Lo que se puede vender o reservar ahora |
 | Stock reservado | `inventario_bodega.qty_reservada` | Lo que la Torre apartó para pedidos de venta en picking o packing |
-| Punto de pedido | `inventario_bodega.qty_minima` | Bajo esta cantidad, MMBE lo marca y ofrece "Pedir" |
+| Stock reservado para producción | `inventario_bodega.qty_reservada_produccion` | Lo apartado para órdenes de producción liberadas. La Torre no lo puede vender |
+| Punto de pedido | `inventario_bodega.qty_minima` | Bajo esta cantidad, MMBE lo marca y ofrece "Reponer" |
+| Lista de materiales (STKO/STPO) | `erp_listas_materiales(_pos)` | La receta: qué componentes lleva un producto fabricado y cuánto, para una cantidad base |
+| Orden de producción (AUFK/AFKO) | `erp_ordenes_produccion` | "Fabricar X unidades". Número desde 1000000 |
+| Reserva / componente de orden (RESB) | `erp_ordenes_componentes` | Los insumos de la orden: necesario, apartado y consumido |
 
 ### Clases de movimiento
 
 | Clase | Qué hace | Dónde nace |
 |---|---|---|
-| **101** | Entrada de mercancías por pedido de compra (+ stock) | MIGO |
+| **101** | Entrada de mercancías (+ stock): por pedido de compra o, con una orden, lo fabricado | MIGO (R01 Pedido o R08 Orden) |
 | **102** | Anulación de un 101 | MIGO → A03 Anulación |
+| **261** | Consumo para orden de producción (− stock, primero de lo apartado para la orden) | MIGO → A07 Salida + R08 Orden, o automático al dar entrada a lo fabricado |
+| **262** | Anulación de un 261: el insumo vuelve a lo apartado (si la orden todavía lo necesita) o a libre | MIGO → A03 Anulación |
 | **501** | Entrada sin pedido (+ stock), por ejemplo una devolución o un regalo del proveedor | MIGO → R10 Otros |
 | **502** | Anulación de un 501 | MIGO |
 | **551** | Salida por desguace o merma: cajas rotas, vencidos (− stock) | MIGO → A07 Salida |
@@ -64,6 +70,11 @@ Escribe el código en el campo de comandos (arriba a la izquierda) y presiona **
 | MI03 | Visualizar documento de inventario | Contado vs sistema, diferencias y su valor |
 | MI20 | Lista de diferencias | Todas las diferencias pendientes de contabilizar, con su valor |
 | MI07 | Contabilizar diferencias | Ajusta el stock: 701 sobrante, 702 faltante |
+| CS01 / CS02 / CS03 | Lista de materiales crear / modificar / visualizar | La receta de un producto fabricado (FERT o HALB), con merma % y descuento automático por componente. CS03 muestra el costo de insumos |
+| CO01 | Crear orden de producción | Calcula los insumos desde la receta. **Verificar disponibilidad** muestra qué falta. Se puede liberar al grabar |
+| CO02 | Modificar orden de producción | Cambiar cantidad o fechas, **Liberar**, **Cierre técnico** (TECO) o **Borrar** |
+| CO03 | Visualizar orden de producción | Componentes (necesario, apartado, consumido), costos plan contra real, movimientos y modificaciones |
+| COOIS | Lista de órdenes de producción | Buscar órdenes por material, centro, estado o fecha |
 
 ### Reglas de ME22N (las mismas de SAP)
 
@@ -130,7 +141,7 @@ Enlace directo a una transacción: `/erp#MMBE?material=SKU-1`.
    - Si el pedido de venta llegó **antes** que la mercadería, queda en **QUIEBRE** y MMBE lo muestra en la columna "Demanda en quiebre".
    - Al contabilizar un MIGO que sube stock (101, 501 o una anulación 552), el sistema reintenta solo esos pedidos, del más antiguo al más nuevo, y los pasa a picking.
    - El mensaje verde dice cuáles se liberaron. **Verificar** te muestra cuáles se liberarían, sin grabar.
-   - El botón "Pedir" de MMBE sugiere una cantidad que ya incluye esa demanda.
+   - El botón "Reponer" de MMBE sugiere una cantidad que ya incluye esa demanda.
 6. Cuando la Torre confirma el **packing**, el reservado se descuenta y en **MB51** aparece como **601**.
 7. ¿Te equivocaste? **MIGO → A03 Anulación → documento**.
    - Crea el movimiento inverso (102/502/552) y devuelve lo recibido al pedido.
@@ -144,6 +155,63 @@ Enlace directo a una transacción: `/erp#MMBE?material=SKU-1`.
 - **Un documento se anula una sola vez.**
 - **Números correlativos sin huecos:** Verificar no consume número.
 - **Auditoría:** cada Grabar queda en `audit_log` con el usuario (`erp.me21n`, `erp.migo`, …).
+
+---
+
+## 3b. El circuito de producción paso a paso
+
+Ejemplo: fabricar pan envasado (`PAN`, tipo FERT) con harina, agua y bolsas.
+
+1. **MM01**: crea los materiales.
+   - `PAN` como FERT (producto terminado) o HALB (semielaborado).
+   - Los insumos como ROH (materia prima) o VERP (embalaje).
+   - Pon el **precio estándar** de cada uno: con eso se calculan los costos.
+2. **CS01**: crea la receta de `PAN` en el centro, por ejemplo con cantidad base **100**.
+   - Componentes: harina 5 KG (merma 2 %), agua 3 L, bolsa 100 UN.
+   - **Merma %**: lo que se pierde al fabricar. Se suma a lo que se saca de bodega (5 kg con 2 % = 5,1 kg).
+   - **Desc. automático**: el insumo se descuenta solo al dar entrada a lo fabricado. Desmárcalo en lo que bodega entrega a mano (por ejemplo, las bolsas).
+3. **CO01**: crea la orden, por ejemplo de 200 panes. Nace con número `1000000` en estado **CRTD** (abierta).
+   - La orden **copia** la receta: cambiar la receta después no cambia órdenes ya creadas.
+   - **Verificar disponibilidad** muestra, por insumo, lo necesario, lo libre y lo que falta.
+4. **CO02 → Liberar**: la orden pasa a **REL** y sus insumos quedan **apartados** (`qty_reservada_produccion`).
+   - La Torre ya no puede usar ese stock para pedidos de venta.
+   - Si falta algún insumo, no se libera y el mensaje dice cuánto falta de cada uno. Compra (ME21N) y libera cuando llegue.
+5. **MIGO → A07 Salida + R08 Orden** (clase 261): bodega entrega a producción los insumos sin descuento automático (las bolsas).
+   - Se puede entregar más de lo previsto: sale del stock libre, con aviso.
+6. **MIGO → A01 Entrada + R08 Orden** (clase 101): da entrada a lo fabricado, por ejemplo 120 panes.
+   - En el mismo documento se descuentan solos los insumos marcados, en proporción: 120 de 200 → 6,12 kg de harina.
+   - La orden pasa a **PDLV** (entregada parcialmente) o **DLV** (entregada). Marca **Entrega final** si no se fabricará más aunque falte.
+   - Si había pedidos de venta en **QUIEBRE** esperando ese producto, se liberan solos.
+7. **CO02 → Cierre técnico** (**TECO**): da la orden por terminada.
+   - Lo apartado que no se usó vuelve a libre utilización.
+   - La orden ya no admite consumos, entradas ni anulaciones.
+8. **CO03**: revisa la orden.
+   - **Plan para lo entregado**: lo que debió costar lo fabricado hasta ahora, según la receta.
+   - **Insumos consumidos**: lo que se gastó de verdad.
+   - **Desviación**: la diferencia; positiva = se gastó más de lo previsto.
+
+### Estados de la orden (los mismos de SAP)
+
+| Estado | Qué significa | Qué se puede hacer |
+|---|---|---|
+| **CRTD** | Abierta, sin insumos apartados | Modificar, Liberar, Borrar |
+| **REL** | Liberada: insumos apartados | Consumir (261), dar entrada (101), modificar, cierre técnico |
+| **PDLV** | Entregada parcialmente | Igual que REL |
+| **DLV** | Entregada completa (o con entrega final) | Consumos y anulaciones; cierre técnico |
+| **TECO** | Cierre técnico | Nada: solo visualizar |
+| **DLFL** | Marcada para borrar | Nada |
+
+### Reglas que el sistema garantiza en producción
+
+- **Stock físico = libre + reservado por la Torre + reservado para producción.** MMBE, MM03, el inventario físico (MI20 y MI07) y la pestaña Bodega de la Torre cuentan las tres partes.
+- **Liberar es todo o nada:** si falta un solo insumo, no se aparta nada.
+- **Anular deshace todo el documento:** anular una entrada 101 de una orden también devuelve los insumos que se descontaron solos (262).
+  - Vuelven a lo apartado para la orden si todavía los necesita; si no, a libre.
+- **Cambiar la cantidad** de una orden solo se puede antes del primer consumo o entrada. Si está liberada, se vuelve a apartar con la cantidad nueva; si no alcanza, no cambia nada.
+- **Una receta no puede contenerse a sí misma**, tampoco a través de un semielaborado.
+- **MMBE → Reponer**: en un producto fabricado propone una orden de producción (CO01); en lo demás, un pedido de compra (ME21N). Descuenta lo que ya viene en compras y en fabricación.
+
+> **Antes de desplegar:** aplica `migrations/031_erp_pp.sql` en la base de datos. El código nuevo de MIGO escribe las columnas `aufnr` y `rspos`.
 
 ---
 
@@ -283,18 +351,22 @@ Eso es todo: la transacción aparece en el menú, en el campo de comandos y en l
 ```
 src/erp/
   core.js                 validaciones, errores tipo SAP, rangos de números
+  produccion.js           lógica PP: explosión de recetas, reservas, consumo, descuento automático, estados
   schema.js               tablas (respaldo runtime de migrations/025_erp_mm.sql)
   registry.js             lista de transacciones + ayudas F4   ← aquí registras las nuevas
   transacciones/
     material.js           MM01 MM02 MM03 MM60
     proveedor.js          XK01 XK02 XK03 MKVZ
     pedido.js             ME21N ME22N ME23N ME2N
-    migo.js               MIGO (101/102/501/502/551/552)
+    migo.js               MIGO (101/102/261/262/501/502/551/552)
     stock.js              MMBE MB51
     inventario.js         MI01 MI04 MI03 MI20 MI07
+    lista-materiales.js   CS01 CS02 CS03
+    orden-produccion.js   CO01 CO02 CO03 COOIS
   ui/
     page.js               HTML y estilos de /erp
     cliente.js            "SAP GUI": campo de comandos, teclas, F4, barra de estado, objeto ui
-  erp.test.js             tests
+  erp.test.js             tests MM
+  produccion.test.js      tests PP (cálculos + ciclo completo contra Postgres en memoria, PGlite)
 src/api/erp.js            API /api/erp/tx/:CODE y /api/erp/f4/:ayuda
 ```

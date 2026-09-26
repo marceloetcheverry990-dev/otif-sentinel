@@ -489,7 +489,10 @@ export async function listarStock(client, tenant_id, depot_id = null) {
     params.push(depot_id);
   }
   const r = await client.query(
+    // qty_reservada_produccion la agrega el ERP (migración 031); vía to_jsonb para
+    // que la Torre no falle en una base donde esa columna todavía no existe.
     `SELECT i.depot_id, i.sku, p.nombre, p.unidad, i.qty_disponible, i.qty_reservada,
+            COALESCE((to_jsonb(i) ->> 'qty_reservada_produccion')::numeric, 0) AS qty_reservada_produccion,
             i.qty_minima, i.ubicacion,
             (i.qty_disponible < i.qty_minima) AS stock_bajo
      FROM inventario_bodega i

@@ -52,6 +52,7 @@ export default defineConfig({
       'src/helpers/operator-auth.test.js',
       'src/api/operator-login.test.js',
       'src/erp/erp.test.js',
+      'src/erp/produccion.test.js',
     ],
   },
 });

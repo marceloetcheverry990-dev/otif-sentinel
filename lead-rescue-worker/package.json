@@ -20,6 +20,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.12.4",
+		"@electric-sql/pglite": "^0.5.8",
 		"fast-check": "^4.8.0",
 		"vitest": "~3.2.6",
 		"wrangler": "^4.75.0"
