@@ -90,6 +90,25 @@ export function resolveSlaFromTimeOfDay(hhmm, refDate = new Date()) {
   return iso;
 }
 
+/**
+ * Hora de pared de HOY en America/Santiago → ISO UTC, sin pasar al día siguiente.
+ * Para inicio de ventana horaria: si ya pasó, la ventana ya está abierta.
+ */
+export function resolveTodayTimeOfDay(hhmm, refDate = new Date()) {
+  const tod = parseTimeOfDay(hhmm);
+  if (!tod) return null;
+  const refMs = refDate instanceof Date ? refDate.getTime() : new Date(refDate).getTime();
+  if (!Number.isFinite(refMs)) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(refMs));
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+  return santiagoWallToUtcIso(get('year'), get('month') - 1, get('day'), tod.hours, tod.minutes);
+}
+
 export function normalizeSantiagoDate(val) {
   if (!val) return null;
   const dateStr = String(val).trim();

@@ -1,6 +1,6 @@
 /**
  * Cabeceras de seguridad por defecto. No pisa valores que el handler ya seteo.
- * CSP permite Leaflet (unpkg), Carto, Google Fonts y Chart.js; scripts de la
+ * CSP permite Leaflet (unpkg), tiles OSM, Google Fonts y Chart.js; scripts de la
  * Torre van inline así que necesita 'unsafe-inline'. Directions van al Worker
  * (/api/route-geometry), no a router.project-osrm.org.
  */
@@ -16,7 +16,8 @@ export const SECURITY_HEADERS = {
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net",
     "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
-    "img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org",
+    // Tiles: Mapbox pasa por el Worker ('self'); OSM directo solo sin MAPBOX_TOKEN
+    "img-src 'self' data: blob: https://tile.openstreetmap.org",
     "connect-src 'self'",
     "frame-ancestors 'none'",
     "base-uri 'self'",

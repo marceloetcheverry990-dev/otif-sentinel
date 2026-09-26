@@ -19,7 +19,12 @@ if (Platform.OS !== 'web') {
 
     if (data) {
       const { locations } = data as { locations: Location.LocationObject[] };
-      const latestLocation = locations[0];
+      // Con pantalla apagada el SO entrega lotes (más viejo primero): locations[0]
+      // mandaba la posición más atrasada. Tomar la de timestamp más reciente.
+      const latestLocation = (locations || []).reduce<Location.LocationObject | null>(
+        (best, loc) => (!best || loc.timestamp > best.timestamp ? loc : best),
+        null
+      );
 
       if (latestLocation) {
         console.log("GPS Track:", latestLocation.coords.latitude, latestLocation.coords.longitude);

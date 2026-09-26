@@ -139,12 +139,12 @@ export async function recordDLQMetrics(env, ctx, queueName = null) {
  * Monitor circuit breaker state transitions
  * 
  * Queries the system_flags table to check circuit breaker states for external services
- * (openai_breaker, tg_breaker). Records state changes as metrics and events.
- * 
+ * (openai_breaker). Records state changes as metrics and events.
+ *
  * Implements requirement 8.3: Integration with existing Circuit_Breaker implementations
- * 
+ *
  * @param {Env} env - Worker environment bindings
- * @returns {Promise<Object>} - { openai_breaker: boolean, tg_breaker: boolean }
+ * @returns {Promise<Object>} - { openai_breaker: boolean }
  * 
  * @example
  * const breakerStates = await getCircuitBreakerStates(env);
@@ -161,12 +161,11 @@ export async function getCircuitBreakerStates(env) {
       const result = await client.query(`
         SELECT key, value, expires_at
         FROM system_flags
-        WHERE key IN ('openai_breaker', 'tg_breaker')
+        WHERE key IN ('openai_breaker')
       `);
 
       const states = {
         openai_breaker: false,
-        tg_breaker: false,
       };
 
       for (const row of result.rows) {
@@ -187,7 +186,6 @@ export async function getCircuitBreakerStates(env) {
     // Return all closed on error (fail-open for monitoring)
     return {
       openai_breaker: false,
-      tg_breaker: false,
     };
   }
 }

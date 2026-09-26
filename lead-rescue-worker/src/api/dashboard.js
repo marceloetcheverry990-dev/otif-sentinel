@@ -11,6 +11,7 @@ import { listDepots, resolveDepot, depotToAppConfig } from '../helpers/depots.js
 import { getTenantSettings } from '../helpers/tenant-settings.js';
 import { attachSlaRiskToViajes } from '../helpers/sla-risk.js';
 import { isWmsEnabled } from '../helpers/wms-stock.js';
+import { buildMapTileConfig } from './map-tiles.js';
 import {
   getViajesPollCacheEntry,
   setViajesPollCacheEntry,
@@ -324,6 +325,8 @@ export async function renderControlTower(request, env, ctx) {
     console.warn('[CONTROL_TOWER_WMS]', e.message);
   }
 
+  const mapTiles = await buildMapTileConfig(env);
+
   return new Response(
     renderControlTowerDashboard(
       ordenes,
@@ -345,6 +348,7 @@ export async function renderControlTower(request, env, ctx) {
         bodega: bodegaConfig,
         dte_live: String(env.DTE_PROVIDER || '').toLowerCase() === 'simpleapi' && String(env.DTE_ALLOW_STUB || '').toLowerCase() !== 'true',
         wms_enabled: wmsEnabled,
+        map_tiles: mapTiles,
       },
     ),
     {

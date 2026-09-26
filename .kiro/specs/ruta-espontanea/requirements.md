@@ -4,7 +4,7 @@
 
 La funcionalidad **Ruta Espontánea / Ruta Rápida Manual** permite a los operadores de la Torre de Control crear y despachar rutas de entrega urgentes con datos mínimos, sin pasar por el flujo normal de sincronización de Excel o WMS. El caso de uso central son entregas de improviso: muestras de producto, clientes nuevos que aún no existen en el sistema, o despachos urgentes donde solo se conoce el nombre del destinatario y la dirección. La OT formal y el valor comercial pueden completarse después, mientras el chofer ya está en ruta.
 
-El sistema genera identificadores temporales con prefijo `SPOT-`, geocodifica las direcciones con Mapbox, optimiza el orden de paradas y despacha la ruta al chofer por Telegram — todo desde el mismo flujo de la Torre de Control existente.
+El sistema genera identificadores temporales con prefijo `SPOT-`, geocodifica las direcciones con Mapbox, optimiza el orden de paradas y despacha la ruta a la app del chofer — todo desde el mismo flujo de la Torre de Control existente.
 
 ---
 
@@ -23,7 +23,7 @@ El sistema genera identificadores temporales con prefijo `SPOT-`, geocodifica la
 - **Operador**: Usuario de la Torre de Control que crea y gestiona rutas.
 - **Sistema**: El worker de Cloudflare que implementa OTIF Sentinel.
 - **Formulario**: El modal de creación de Ruta Espontánea en la Torre de Control.
-- **Mensaje_Telegram**: Notificación enviada al chofer vía bot de Telegram.
+- **App_Chofer**: App móvil del chofer (`logistica-app`); ve el viaje vinculado a su vehículo (`flota_vehiculos.trip_id_actual`).
 
 ---
 
@@ -102,24 +102,24 @@ El sistema genera identificadores temporales con prefijo `SPOT-`, geocodifica la
 
 #### Acceptance Criteria
 
-1. WHEN el operador confirma la Ruta Espontánea con "¿El camión ya está cargado?" = Sí, THE Sistema SHALL asignar el estado `EN_RUTA` a todas las OTs de la ruta y enviar la ruta al chofer por Telegram de forma inmediata.
-2. WHEN el operador confirma la Ruta Espontánea con "¿El camión ya está cargado?" = No, THE Sistema SHALL asignar el estado `PENDIENTE_CARGA` a todas las OTs de la ruta y omitir el envío por Telegram.
+1. WHEN el operador confirma la Ruta Espontánea con "¿El camión ya está cargado?" = Sí, THE Sistema SHALL asignar el estado `EN_RUTA` a todas las OTs de la ruta y dejar la ruta visible de inmediato en la App_Chofer.
+2. WHEN el operador confirma la Ruta Espontánea con "¿El camión ya está cargado?" = No, THE Sistema SHALL asignar el estado `PENDIENTE_CARGA` a todas las OTs de la ruta y no despacharla todavía a la App_Chofer.
 3. WHILE una Ruta Espontánea tiene OTs en estado `PENDIENTE_CARGA`, THE Torre_de_Control SHALL mostrar el botón "Confirmar carga y despachar" sobre esa ruta.
-4. WHEN el operador hace clic en "Confirmar carga y despachar", THE Sistema SHALL actualizar el estado de todas las OTs de la ruta de `PENDIENTE_CARGA` a `EN_RUTA` y enviar la ruta al chofer por Telegram.
+4. WHEN el operador hace clic en "Confirmar carga y despachar", THE Sistema SHALL actualizar el estado de todas las OTs de la ruta de `PENDIENTE_CARGA` a `EN_RUTA` y despachar la ruta a la App_Chofer.
 5. THE Sistema SHALL asignar el `trip_id` y el `chofer_asignado_id` a todas las OTs de la ruta en el momento de la creación, independientemente del estado de carga.
 
 ---
 
 ### Requirement 7
 
-**User Story:** Como chofer, quiero recibir las paradas de una Ruta Espontánea por Telegram igual que las rutas normales, para no tener que aprender una nueva interfaz.
+**User Story:** Como chofer, quiero ver las paradas de una Ruta Espontánea en la App_Chofer igual que las rutas normales, para no tener que aprender una nueva interfaz.
 
 #### Acceptance Criteria
 
-1. WHEN se despacha una Ruta Espontánea con estado `EN_RUTA`, THE Sistema SHALL enviar al chofer por Telegram el mismo formato de mensaje de ruta que para rutas normales, con listado de paradas y botones interactivos.
-2. THE Mensaje_Telegram SHALL incluir para cada parada: nombre del cliente, dirección y número de secuencia (`stop_sequence`).
-3. THE Sistema SHALL utilizar el `chofer_asignado_id` de la ruta como `chat_id` de Telegram, igual que en el flujo de rutas normales.
-4. WHEN el chofer reporta ENTREGADO o RECHAZADO desde Telegram, THE Sistema SHALL actualizar el estado de la OT_Espontánea correspondiente con la misma lógica de transición de estados que para OTs normales.
+1. WHEN se despacha una Ruta Espontánea con estado `EN_RUTA`, THE Sistema SHALL vincular el viaje al vehículo del chofer (`flota_vehiculos.trip_id_actual`) para que la App_Chofer lo muestre con el mismo formato que las rutas normales.
+2. THE App_Chofer SHALL mostrar para cada parada: nombre del cliente, dirección y número de secuencia (`stop_sequence`).
+3. THE Sistema SHALL resolver el viaje del chofer por su patente y RUT (`/api/app-chofer-rutas`), igual que en el flujo de rutas normales.
+4. WHEN el chofer reporta ENTREGADO o RECHAZADO desde la App_Chofer, THE Sistema SHALL actualizar el estado de la OT_Espontánea correspondiente con la misma lógica de transición de estados que para OTs normales.
 
 ---
 

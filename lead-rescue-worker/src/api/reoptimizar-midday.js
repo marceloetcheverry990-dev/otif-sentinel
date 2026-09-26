@@ -7,7 +7,10 @@
 import { createClient } from '@supabase/supabase-js';
 import { CORS_HEADERS, requireTenantId } from '../config.js';
 import { resolveDestinoCoords } from '../helpers/destino-coords.js';
-import { solveVrpAuto } from '../helpers/vrp-solver.js';
+import { solveVrpAuto, routeDistanceKm } from '../helpers/vrp-solver.js';
+import { tryOptimizerLock, releaseOptimizerLock, ROAD_FACTOR } from './optimizer.js';
+import { loadPerfilPesos } from '../helpers/perfil-pesos.js';
+import { normalizeFleet, matchRoutesToFleet } from '../helpers/fleet-matching.js';
 import { resolveDepot, depotToSolver } from '../helpers/depots.js';
 import {
   splitFrozenOpen,
@@ -64,11 +67,29 @@ export async function reoptimizarMidday(request, env, ctx, operator = null) {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  try {
-    const tenant_id = operator?.tenant_id;
-    const tenantError = requireTenantId(tenant_id);
-    if (tenantError) return tenantError;
+  const tenant_id = operator?.tenant_id;
+  const tenantError = requireTenantId(tenant_id);
+  if (tenantError) return tenantError;
 
+  // Mismo lock que Rutear/Recalcular: sin él, dos corridas asignan las mismas OTs
+  const gotLock = await tryOptimizerLock(env, tenant_id);
+  if (!gotLock) {
+    return json({
+      exito: false,
+      error: 'OPTIMIZATION_IN_PROGRESS',
+      msg: 'Ya hay una optimización en curso para este tenant',
+    }, 409);
+  }
+
+  try {
+    return await runMidday(request, env, tenant_id);
+  } finally {
+    await releaseOptimizerLock(env, tenant_id);
+  }
+}
+
+async function runMidday(request, env, tenant_id) {
+  try {
     let body = {};
     try {
       body = await request.json();
@@ -385,56 +406,89 @@ export async function reoptimizarMidday(request, env, ctx, operator = null) {
         (c) => c.estado === 'DISPONIBLE' && c.patente_asignada
       );
       if (disponibles.length > 0) {
-        const avgCap =
-          disponibles.reduce((s, c) => s + (Number(c.capacidad_volumen) || 100), 0) /
-          disponibles.length;
         try {
           await enrichOrdersWithSlaRisk(supabase, tenant_id, leftovers);
         } catch (slaErr) {
           console.warn('[MIDDAY_SLA_RISK]', slaErr.message);
         }
-        const pesoRiesgo = leftovers.some((o) => Number(o.riesgo_score) >= 50) ? 0.8 : 0;
+        // Perfil elegido en la Torre (antes: pesos fijos, el selector no hacía nada acá)
+        const perfilPesos = await loadPerfilPesos(supabase, tenant_id, body.perfil_id);
+        const flota = disponibles.map((c) => ({
+          capacity: Number(c.capacidad_volumen) || 100,
+          capacityWeight: Number(c.capacidad_peso) || 99999,
+        }));
         const vrp = solveVrpAuto(leftovers, {
           depot,
-          capacity: avgCap,
+          vehicles: flota,
           maxVehicles: disponibles.length,
           maxStopsPerRoute: 24,
           startMs: Date.now(),
-          pesos: { peso_distancia: 1, peso_sla: 1.2, peso_valor_carga: 0, peso_riesgo_ia: pesoRiesgo },
+          pesos: perfilPesos,
           velocidadKmH: velocidad,
+          roadFactor: ROAD_FACTOR,
+          lunchBreak: true,
         });
 
-        const pool = [...disponibles];
-        for (const route of vrp.routes) {
-          if (!route.length || !pool.length) {
+        // Cada ruta al camión donde cabe (flota mixta), no al primero de la lista
+        const routes = vrp.routes.filter((r) => r.length);
+        const fleet = normalizeFleet(flota);
+        const { vehicleOf } = matchRoutesToFleet(routes, fleet);
+        for (let ri = 0; ri < routes.length; ri++) {
+          const route = routes[ri];
+          if (vehicleOf[ri] === -1) {
             sinAsignar.push(...route.map((r) => r.ot_id));
             continue;
           }
-          const ch = pool.shift();
+          const ch = disponibles[fleet[vehicleOf[ri]].idx];
           const tripId = `TRIP-${crypto.randomUUID().split('-')[0].toUpperCase()}`;
           nuevosViajes += 1;
-          let seq = 1;
-          for (const p of route) {
-            updates.push(
-              supabase
+          const etaByOt = estimateOpenEtas(route, depot, velocidad);
+          const kmViaje = Number((routeDistanceKm(route, depot) * 1.2).toFixed(2));
+          route.forEach((p, idx) => {
+            const stopSequence = idx + 1;
+            const etaIso = etaByOt.get(p.ot_id) || null;
+            updates.push((async () => {
+              // metadata es JSONB completo: mezclar, no pisar (scan_token, dirección, coords)
+              const metaBase = parseMeta(p.metadata);
+              const tok = metaBase.scan_token || await computeScanToken(tenant_id, p.ot_id, env);
+              return supabase
                 .from('ordenes_pendientes')
                 .update({
                   trip_id: tripId,
                   chofer_asignado_id: String(ch.chofer_id),
-                  stop_sequence: seq++,
+                  stop_sequence: stopSequence,
                   estado_operacional: 'CAMION_ASIGNADO',
                   metadata: {
+                    ...metaBase,
+                    ...(tok ? { scan_token: tok } : {}),
                     routing: {
+                      ...(metaBase.routing || {}),
                       optimization_run_id: runId,
                       trip_id: tripId,
+                      stop_sequence: stopSequence,
                       midday_new_trip: true,
+                      distancia_total_viaje_km: kmViaje,
+                      ...(etaIso ? { eta_estimado: etaIso, eta_source: 'MIDDAY_REOPT' } : {}),
                     },
                   },
+                  ...(etaIso ? { eta: etaIso } : {}),
                 })
                 .eq('ot_id', p.ot_id)
                 .eq('tenant_id', tenant_id)
-            );
-          }
+                // Solo si sigue en backlog: no pisar una OT que otra acción ya ruteó
+                .eq('estado_operacional', 'PENDIENTE_RUTEO')
+                .is('trip_id', null);
+            })());
+          });
+          updates.push(supabase.from('trip_metrics').upsert({
+            trip_id: tripId,
+            tenant_id,
+            chofer_id: String(ch.chofer_id),
+            patente: ch.patente_asignada || null,
+            km_planificados: kmViaje,
+            total_paradas: route.length,
+            estado: 'activo',
+          }, { onConflict: 'trip_id' }));
           if (ch.patente_asignada) {
             updates.push(
               supabase

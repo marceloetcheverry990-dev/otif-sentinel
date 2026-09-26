@@ -27,9 +27,9 @@ Mensaje: Latencia de cola elevada (leads-enrichment-queue): 15.32 minutos (umbra
 |------|---------|-----------|
 | `leads-ingestion-queue` | `MAIN_QUEUE` | Entrada de leads desde WMS webhook |
 | `leads-enrichment-queue` | `ENRICHMENT_QUEUE` | Enriquecimiento con IA (OpenAI) |
-| `leads-delivery-queue` | `DELIVERY_QUEUE` | Entrega por Telegram a choferes |
+| `leads-delivery-queue` | `DELIVERY_QUEUE` | Cierre interno del outbox (marca `transaction_logs.delivered_at`) |
 
-Flujo: WMS → MAIN_QUEUE → ENRICHMENT_QUEUE → DELIVERY_QUEUE → Telegram
+Flujo: WMS → MAIN_QUEUE → ENRICHMENT_QUEUE → DELIVERY_QUEUE (no envía a canales externos)
 
 ---
 
@@ -37,7 +37,7 @@ Flujo: WMS → MAIN_QUEUE → ENRICHMENT_QUEUE → DELIVERY_QUEUE → Telegram
 
 - **MAIN_QUEUE**: leads entrando sin procesar → retraso en asignación de choferes
 - **ENRICHMENT_QUEUE**: enriquecimiento IA detenido → mensajes sin contexto completo
-- **DELIVERY_QUEUE**: mensajes a choferes retrasados → SLA en riesgo
+- **DELIVERY_QUEUE**: outbox sin cerrar → OTs quedan como no entregadas en `transaction_logs`
 
 ---
 
@@ -90,8 +90,7 @@ ORDER BY pendientes DESC;
 SELECT key, value, updated_at FROM system_flags WHERE key LIKE '%breaker%';
 ```
 
-Si `openai_breaker = 'OPEN'` → ENRICHMENT_QUEUE se acumula.  
-Si `telegram_breaker = 'OPEN'` → DELIVERY_QUEUE se acumula.
+Si `openai_breaker = 'OPEN'` → ENRICHMENT_QUEUE se acumula.
 
 ### Paso 5 — Ver errores de procesamiento en logs
 
@@ -121,19 +120,11 @@ LIMIT 10;
 UPDATE system_flags SET value = 'CLOSED', updated_at = NOW() WHERE key = 'openai_breaker';
 ```
 
-**Caso B — Circuit breaker de Telegram abierto**
-
-> ⚠️ **Misma advertencia que Caso A.** Confirmar disponibilidad de Telegram antes de ejecutar.
-
-```sql
-UPDATE system_flags SET value = 'CLOSED', updated_at = NOW() WHERE key = 'telegram_breaker';
-```
-
-**Caso C — Mensajes acumulados en outbox**
+**Caso B — Mensajes acumulados en outbox**
 - El job `runOutboxRecovery` corre cada 2 minutos — esperar 2-4 minutos para ver si se drena solo
 - Mensajes con `retry_count >= 3` se mueven a DLQ automáticamente (ver runbook `dlq-overflow.md`)
 
-**Caso D — Volumen alto orgánico**
+**Caso C — Volumen alto orgánico**
 - `max_batch_size: 50` por cola — el sistema procesa en batches de hasta 50 mensajes
 - Si la latencia es alta pero decrece gradualmente → backlog orgánico, no requiere acción
 - Si persiste más de 15 minutos sin mejorar → investigar causa raíz
@@ -160,7 +151,7 @@ FROM outbox_events WHERE processed_at IS NULL;
 
 ## Escalación
 
-- **10 min**: si el circuit breaker no se cierra automáticamente y el servicio externo está disponible, cerrar manualmente con la advertencia del Caso A/B
+- **10 min**: si el circuit breaker no se cierra automáticamente y el servicio externo está disponible, cerrar manualmente con la advertencia del Caso A
 - **20 min**: si la latencia sigue alta con outbox creciendo, puede haber un problema de infraestructura de Cloudflare Queues — revisar https://www.cloudflarestatus.com
 - **Sin resolución**: escalar al responsable técnico con el output del Paso 1 y Paso 3
 

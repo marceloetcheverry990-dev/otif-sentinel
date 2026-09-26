@@ -1,20 +1,32 @@
 /**
  * VRP heurístico de calidad (Worker-friendly).
  * Clarke-Wright (savings) + 2-opt local search.
- * Hard constraints: volume, weight, time windows (VRPTW), HAZMAT/FOOD segregation.
+ * Hard constraints: volume, weight, time windows (VRPTW), HAZMAT/FOOD segregation,
+ * flota real (cada ruta tiene que caber en un camión distinto).
  */
 
 import {
   fitsCapacity,
-  routeVolume as cargoRouteVolume,
-  routeWeight as cargoRouteWeight,
   tagsConflict,
   unionTags,
   hasHazmat,
   hasFood,
+  normalizeTags,
 } from './cargo-constraints.js';
+import {
+  normalizeFleet,
+  fleetGreedyOk,
+  matchRoutesToFleet,
+  loadOf,
+} from './fleet-matching.js';
 
 export const DEFAULT_DEPOT = { lat: -33.5132, lng: -70.7672 };
+
+const DEFAULT_SERVICE_SEC = 5 * 60;
+const LUNCH_FROM_HOUR = 13;
+const LUNCH_TO_HOUR = 15;
+const LUNCH_MS = 3600000;
+const FULL_SEEDS_MAX_STOPS = 12;
 
 export function calcularDistanciaKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -44,136 +56,132 @@ export function routeDistanceKm(stops, depot = DEFAULT_DEPOT) {
   return d;
 }
 
-function polarAngle(depot, stop) {
-  return Math.atan2(
-    Number(stop.lat) - Number(depot.lat),
-    Number(stop.lng) - Number(depot.lng),
-  );
-}
+// Parsear la fecha en cada simulación era el 80% del CPU del solver: se cachea
+// por parada (clave = el string, por si alguien cambia la ventana de la OT).
+const windowCache = new WeakMap();
 
-/**
- * Clarke-Wright solo fusiona; si cabe todo en 1 camión, maxVehicles no partía.
- * Esto abre las rutas más largas hasta el N° pedido (tope: cantidad de paradas).
- */
-export function splitUpToVehicles(routes, maxVehicles, depot = DEFAULT_DEPOT) {
-  const cap = Math.max(1, Math.floor(Number(maxVehicles) || 1));
-  let out = (routes || []).filter((r) => Array.isArray(r) && r.length).map((r) => [...r]);
-  if (!out.length) return [];
-  const total = out.reduce((s, r) => s + r.length, 0);
-  const target = Math.min(cap, total);
-  while (out.length < target) {
-    out.sort((a, b) => b.length - a.length);
-    const big = out[0];
-    if (!big || big.length < 2) break;
-    out.shift();
-    const ordered = [...big].sort((a, b) => polarAngle(depot, a) - polarAngle(depot, b));
-    const mid = Math.max(1, Math.min(ordered.length - 1, Math.ceil(ordered.length / 2)));
-    out.push(ordered.slice(0, mid), ordered.slice(mid));
+function parseWindow(o, field) {
+  const raw = field === 'end' ? (o.ventana_fin || o.fecha_hora_sla) : o.ventana_inicio;
+  let entry = windowCache.get(o);
+  if (!entry) {
+    entry = {};
+    windowCache.set(o, entry);
   }
-  return out.filter((r) => r.length);
-}
-
-/** Parte si hay de más camiones, junta si hay de menos, y no pierde paradas. */
-export function enforceVehicleCount(routes, maxVehicles, allStops, depot = DEFAULT_DEPOT) {
-  let out = splitUpToVehicles(routes, maxVehicles, depot);
-  const seen = new Set();
-  for (const r of out) {
-    for (const s of r) {
-      if (s && s.ot_id) seen.add(String(s.ot_id));
-    }
+  const hit = entry[field];
+  if (hit && hit.raw === raw) return hit.ms;
+  let ms = null;
+  if (raw) {
+    const t = new Date(raw).getTime();
+    ms = Number.isFinite(t) ? t : null;
   }
-  for (const s of allStops || []) {
-    const id = s && s.ot_id != null ? String(s.ot_id) : '';
-    if (!id || seen.has(id)) continue;
-    // Buscar la primera ruta que no choque en segregación HAZMAT/FOOD antes
-    // de forzarlo en out[0] a ciegas.
-    const sTags = unionTags([s]);
-    const target = out.find((r) => !tagsConflict(unionTags(r), sTags));
-    if (target) target.push(s);
-    else if (!out.length) out = [[s]];
-    else out.push([s]);
-    seen.add(id);
-  }
-  const cap = Math.max(1, Math.floor(Number(maxVehicles) || 1));
-  // Forzar el N° de camiones fusionando las rutas más chicas — pero nunca
-  // mezclando HAZMAT con FOOD. Si el N° de camiones pedido es incompatible
-  // con la segregación, priorizar la segregación (mejor una ruta de más que
-  // un camión con carga incompatible mezclada).
-  while (out.length > cap && out.length > 1) {
-    out.sort((a, b) => a.length - b.length);
-    let mergedAt = null;
-    outer: for (let x = 0; x < out.length; x++) {
-      for (let y = x + 1; y < out.length; y++) {
-        if (!tagsConflict(unionTags(out[x]), unionTags(out[y]))) {
-          mergedAt = [x, y];
-          break outer;
-        }
-      }
-    }
-    if (!mergedAt) break; // ningún par se puede fusionar sin violar segregación
-    const [x, y] = mergedAt;
-    const merged = [...out[x], ...out[y]];
-    out = out.filter((_, idx) => idx !== x && idx !== y);
-    out.push(merged);
-  }
-  return out.filter((r) => r.length);
-}
-
-function routeVolume(stops) {
-  return cargoRouteVolume(stops);
-}
-
-function routeWeight(stops) {
-  return cargoRouteWeight(stops);
+  entry[field] = { raw, ms };
+  return ms;
 }
 
 /** Hard deadline: ventana_fin || fecha_hora_sla */
 export function stopWindowEndMs(o) {
-  const fin = o?.ventana_fin || o?.fecha_hora_sla;
-  if (!fin) return null;
-  const ms = new Date(fin).getTime();
-  return Number.isFinite(ms) ? ms : null;
+  return o ? parseWindow(o, 'end') : null;
 }
 
 export function stopWindowStartMs(o) {
-  if (!o?.ventana_inicio) return null;
-  const ms = new Date(o.ventana_inicio).getTime();
-  return Number.isFinite(ms) ? ms : null;
+  return o ? parseWindow(o, 'start') : null;
+}
+
+/** Offset de America/Santiago en un instante (hora local = UTC + offset). */
+export function santiagoOffsetMs(ms) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Santiago',
+    hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(ms));
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return asUtc - (ms - (((ms % 1000) + 1000) % 1000));
 }
 
 /**
- * Simula llegadas. Wait permitido hasta ventana_inicio; rechazo si llegada > ventana_fin.
- * @returns {{ ok: boolean, arrivals?: number[] }}
+ * Modelo de tiempo único para factibilidad (ventanas), costo SLA y ETAs.
+ * Antes el solver suponía 5 min por parada y sin colación, mientras las ETA del
+ * optimizador usaban el tiempo histórico del cliente (B2B 45 min) y la hora de
+ * almuerzo: rutas "factibles" para el solver llegaban tarde en la ETA guardada.
+ *
+ * @param {object} o
+ * @param {number} [o.startMs] hora de salida de bodega
+ * @param {number} [o.velocidadKmH]
+ * @param {(stop) => number} [o.serviceSecondsFn] tiempo de servicio por parada
+ * @param {number} [o.roadFactor] km de calle / km en línea recta
+ * @param {boolean} [o.lunchBreak] 1 h de colación la primera vez que se llega entre 13 y 15 (Chile)
  */
-export function routeFeasibleTw(stops, startMs = Date.now(), velocidadKmH = 35, depot = DEFAULT_DEPOT) {
-  if (!stops?.length) return { ok: true, arrivals: [] };
-  const vel = Math.max(5, Number(velocidadKmH) || 35);
+export function makeTiming({
+  startMs = Date.now(),
+  velocidadKmH = 35,
+  depot = DEFAULT_DEPOT,
+  serviceSecondsFn = null,
+  roadFactor = 1,
+  lunchBreak = false,
+} = {}) {
   const origin = Number.isFinite(startMs) ? startMs : Date.now();
-  let t = origin;
-  let lat = depot.lat;
-  let lng = depot.lng;
+  return {
+    startMs: origin,
+    vel: Math.max(5, Number(velocidadKmH) || 35),
+    depot: depot || DEFAULT_DEPOT,
+    serviceMs(o) {
+      const s = serviceSecondsFn ? Number(serviceSecondsFn(o)) : DEFAULT_SERVICE_SEC;
+      return (Number.isFinite(s) && s >= 0 ? s : DEFAULT_SERVICE_SEC) * 1000;
+    },
+    roadFactor: Number(roadFactor) > 0 ? Number(roadFactor) : 1,
+    tzOffsetMs: lunchBreak ? santiagoOffsetMs(origin) : null,
+  };
+}
+
+/**
+ * Simula llegadas desde la bodega. Espera hasta ventana_inicio; infactible si se
+ * llega después de ventana_fin (salvo SLA ya vencido al despacho: se entrega igual).
+ */
+function simulate(stops, tm) {
+  let t = tm.startMs;
+  let lat = tm.depot.lat;
+  let lng = tm.depot.lng;
+  let lunchTaken = false;
+  let ok = true;
   const arrivals = [];
-  for (let i = 0; i < stops.length; i++) {
-    const o = stops[i];
-    const km = calcularDistanciaKm(lat, lng, o.lat, o.lng);
-    t += (km / vel) * 3600000;
-    if (i > 0) t += 5 * 60 * 1000; // service at previous
+  for (const o of stops) {
+    t += ((calcularDistanciaKm(lat, lng, o.lat, o.lng) * tm.roadFactor) / tm.vel) * 3600000;
     const startW = stopWindowStartMs(o);
-    if (startW != null && t < startW) t = startW; // wait
-    const endW = stopWindowEndMs(o);
-    // SLA ya vencido al despacho: se entrega igual; el costo blando lo prioriza.
-    if (endW != null && endW > origin && t > endW + 1e-6) return { ok: false, arrivals };
+    if (startW != null && t < startW) t = startW;
     arrivals.push(t);
+    const endW = stopWindowEndMs(o);
+    if (endW != null && endW > tm.startMs && t > endW + 1e-6) ok = false;
+    t += tm.serviceMs(o);
+    if (tm.tzOffsetMs != null && !lunchTaken) {
+      const hour = ((Math.floor((arrivals[arrivals.length - 1] + tm.tzOffsetMs) / 3600000) % 24) + 24) % 24;
+      if (hour >= LUNCH_FROM_HOUR && hour < LUNCH_TO_HOUR) {
+        t += LUNCH_MS;
+        lunchTaken = true;
+      }
+    }
     lat = o.lat;
     lng = o.lng;
   }
-  return { ok: true, arrivals };
+  return { ok, arrivals };
+}
+
+/**
+ * @param {object} [extra] serviceSecondsFn / roadFactor / lunchBreak (ver makeTiming)
+ * @returns {{ ok: boolean, arrivals: number[] }}
+ */
+export function routeFeasibleTw(stops, startMs = Date.now(), velocidadKmH = 35, depot = DEFAULT_DEPOT, extra = {}) {
+  if (!stops?.length) return { ok: true, arrivals: [] };
+  return simulate(stops, makeTiming({ ...extra, startMs, velocidadKmH, depot }));
+}
+
+function stopTags(s) {
+  return normalizeTags(s?.tags || s?.tags_requeridos);
 }
 
 function routeSegregationOk(stops) {
-  // Delegar a cargo-constraints.js (fuente única de verdad de qué tags son
-  // HAZMAT/FOOD) — una copia local aquí ya quedó incompleta una vez (le
-  // faltaba PELIGROSO/PELIGROSA, solo tenía el typo PELGEROSO).
+  // Fuente única de verdad de qué tags son HAZMAT/FOOD: cargo-constraints.js
   const tags = unionTags(stops);
   return !(hasHazmat(tags) && hasFood(tags));
 }
@@ -198,78 +206,91 @@ export function slaUrgency(o, startMs) {
 /**
  * Costo de perfil: km + ir tarde en SLA/valor/riesgo.
  * Los pesos 0 tienen que poder apagar un término (no usar `|| 1`).
+ * Las llegadas salen del mismo modelo de tiempo que la factibilidad (desde bodega).
  */
-function softSlaPenalty(stops, startMs, pesos = {}, velocidadKmH = 35) {
+function softSlaPenalty(stops, tm, pesos = {}) {
   if (!stops.length) return 0;
   const wSla = numW(pesos.peso_sla, 1);
   const wVal = numW(pesos.peso_valor_carga, 0);
   const wRiesgo = numW(pesos.peso_riesgo_ia, 0);
-  const vel = Math.max(5, Number(velocidadKmH) || 35);
-  const origin = startMs || Date.now();
+  const { arrivals } = simulate(stops, tm);
   const denom = Math.max(1, stops.length - 1);
   let pen = 0;
-  let t = origin;
-  let lat = stops[0]?.lat;
-  let lng = stops[0]?.lng;
   for (let i = 0; i < stops.length; i++) {
     const o = stops[i];
-    if (i > 0) {
-      const km = calcularDistanciaKm(lat, lng, o.lat, o.lng);
-      t += (km / vel) * 3600000 + 5 * 60 * 1000;
-    }
     const endW = stopWindowEndMs(o) ?? new Date(o.fecha_hora_sla || '2099-12-31').getTime();
-    if (Number.isFinite(endW) && t > endW) {
-      pen += ((t - endW) / 3600000) * 40 * wSla;
+    if (Number.isFinite(endW) && arrivals[i] > endW) {
+      pen += ((arrivals[i] - endW) / 3600000) * 40 * wSla;
     }
     const pos = i / denom;
-    pen += pos * slaUrgency(o, origin) * 18 * wSla;
-    const valorMillones = Number(o.valor_oc_clp || 0) / 1e6;
-    pen += pos * valorMillones * 80 * wVal;
-    const riesgo = Number(o.riesgo_score || o.risk_score || 0);
-    pen += pos * (riesgo / 100) * 55 * wRiesgo;
-    lat = o.lat;
-    lng = o.lng;
+    pen += pos * slaUrgency(o, tm.startMs) * 18 * wSla;
+    pen += pos * (Number(o.valor_oc_clp || 0) / 1e6) * 80 * wVal;
+    pen += pos * (Number(o.riesgo_score || o.risk_score || 0) / 100) * 55 * wRiesgo;
   }
   return pen;
 }
 
-function routeCost(stops, depot, startMs, pesos, velocidadKmH = 35) {
-  const wDist = numW(pesos?.peso_distancia, 1);
-  return routeDistanceKm(stops, depot) * wDist + softSlaPenalty(stops, startMs, pesos, velocidadKmH);
+function routeCost(stops, tm, pesos) {
+  return routeDistanceKm(stops, tm.depot) * numW(pesos?.peso_distancia, 1) + softSlaPenalty(stops, tm, pesos);
 }
-
-function isFeasibleRoute(stops, {
-  depot = DEFAULT_DEPOT,
-  capacity = Infinity,
-  capacityWeight = Infinity,
-  startMs = Date.now(),
-  velocidadKmH = 35,
-} = {}) {
-  if (!routeSegregationOk(stops)) return false;
-  const cap = fitsCapacity(stops, capacity, capacityWeight);
-  if (!cap.ok) return false;
-  return routeFeasibleTw(stops, startMs, velocidadKmH, depot).ok;
-}
-
 
 /**
- * 2-opt: reverse segments while improving cost (solo candidatos factibles TW/capacidad).
+ * Contexto de restricciones de ruta. `fleet` = camiones reales (más grande primero).
+ * Una ruta tiene que caber en el camión más grande; el conjunto de rutas tiene que
+ * poder repartirse entre camiones distintos (fleetGreedyOk / matchRoutesToFleet).
  */
-export function twoOptRoute(stops, {
-  depot = DEFAULT_DEPOT,
-  startMs = Date.now(),
-  pesos = {},
-  velocidadKmH = 35,
-  maxIter = 80,
-  capacity = Infinity,
-  capacityWeight = Infinity,
-} = {}) {
+function makeConstraints({ capacity = Infinity, capacityWeight = Infinity, fleet = null, maxStopsPerRoute = 24 } = {}) {
+  const f = fleet && fleet.length ? fleet : null;
+  const maxCap = f ? f[0].capacity : Number(capacity);
+  const maxCapW = f ? Math.max(...f.map((v) => v.capacityWeight)) : Number(capacityWeight);
+  const minCap = f ? Math.min(...f.map((v) => v.capacity)) : maxCap;
+  const minCapW = f ? Math.min(...f.map((v) => v.capacityWeight)) : maxCapW;
+  return {
+    fleet: f,
+    maxCap: Number.isFinite(maxCap) ? maxCap : Infinity,
+    maxCapW: Number.isFinite(maxCapW) ? maxCapW : Infinity,
+    minCap,
+    minCapW,
+    heterogeneous: Boolean(f) && (minCap < maxCap - 1e-9 || minCapW < maxCapW - 1e-9),
+    maxStops: Math.max(1, Number(maxStopsPerRoute) || 24),
+  };
+}
+
+function isFeasibleRoute(stops, cx, tm) {
+  if (stops.length > cx.maxStops) return false;
+  if (!routeSegregationOk(stops)) return false;
+  if (!fitsCapacity(stops, cx.maxCap, cx.maxCapW).ok) return false;
+  return simulate(stops, tm).ok;
+}
+
+/** ¿El conjunto sigue cabiendo en la flota si una ruta crece a `load`? */
+function fleetStillFits(cx, otherLoads, load) {
+  if (!cx.heterogeneous) return true;
+  if (load.vol <= cx.minCap + 1e-9 && load.peso <= cx.minCapW + 1e-9) return true;
+  return fleetGreedyOk([...otherLoads, load], cx.fleet);
+}
+
+/** Acepta opciones sueltas (compatibilidad) o timing/cx ya armados por solveVrp. */
+function ctxFrom(opts = {}) {
+  const tm = opts.timing || makeTiming(opts);
+  const cx = opts.cx || makeConstraints(opts);
+  return { tm, cx, pesos: opts.pesos || {} };
+}
+
+/**
+ * 2-opt: invierte segmentos mientras baje el costo. Nunca cambia una ruta
+ * factible por una infactible; si la actual es infactible, toma cualquier
+ * factible (antes se quedaba con la semilla infactible si la factible costaba más).
+ */
+export function twoOptRoute(stops, opts = {}) {
   if (!stops || stops.length < 2) return stops ? [...stops] : [];
+  const { tm, cx, pesos } = ctxFrom(opts);
+  const maxIter = opts.maxIter || 80;
   let best = [...stops];
-  let bestCost = routeCost(best, depot, startMs, pesos, velocidadKmH);
+  let bestFeasible = isFeasibleRoute(best, cx, tm);
+  let bestCost = routeCost(best, tm, pesos);
   let improved = true;
   let iter = 0;
-  const feasOpts = { depot, capacity, capacityWeight, startMs, velocidadKmH };
 
   while (improved && iter < maxIter) {
     improved = false;
@@ -280,11 +301,13 @@ export function twoOptRoute(stops, {
           i === -1
             ? best.slice(0, k + 1).reverse().concat(best.slice(k + 1))
             : best.slice(0, i + 1).concat(best.slice(i + 1, k + 1).reverse(), best.slice(k + 1));
-        if (!isFeasibleRoute(candidate, feasOpts)) continue;
-        const c = routeCost(candidate, depot, startMs, pesos, velocidadKmH);
-        if (c + 1e-9 < bestCost) {
+        const feasible = isFeasibleRoute(candidate, cx, tm);
+        if (bestFeasible && !feasible) continue;
+        const c = routeCost(candidate, tm, pesos);
+        if ((feasible && !bestFeasible) || c + 1e-9 < bestCost) {
           best = candidate;
           bestCost = c;
+          bestFeasible = feasible;
           improved = true;
         }
       }
@@ -294,29 +317,27 @@ export function twoOptRoute(stops, {
 }
 
 /**
- * Clarke-Wright savings algorithm (parallel version, capacity + TW + segregation).
+ * Clarke-Wright savings (versión paralela) con capacidad, ventanas, segregación
+ * y flota real.
  */
-export function clarkeWrightRoutes(ordenes, {
-  depot = DEFAULT_DEPOT,
-  capacity = 100,
-  capacityWeight = Infinity,
-  maxStopsPerRoute = 24,
-  startMs = Date.now(),
-  velocidadKmH = 35,
-} = {}) {
+export function clarkeWrightRoutes(ordenes, opts = {}) {
+  const { tm, cx } = ctxFrom(opts);
   const nodes = (ordenes || []).filter(
     (o) => o && Number.isFinite(Number(o.lat)) && Number.isFinite(Number(o.lng))
   );
   if (nodes.length === 0) return [];
   if (nodes.length === 1) return [[nodes[0]]];
+  const depot = tm.depot;
 
   const routesById = new Map();
+  const loadById = new Map();
   const routeOf = new Map();
   let nextId = 1;
 
   for (const n of nodes) {
     const rid = `r${nextId++}`;
     routesById.set(rid, [n]);
+    loadById.set(rid, loadOf([n]));
     routeOf.set(n.ot_id, rid);
   }
 
@@ -334,10 +355,8 @@ export function clarkeWrightRoutes(ordenes, {
   }
   savings.sort((x, y) => y.s - x.s);
 
-  const isEndpoint = (route, otId) => {
-    if (!route.length) return false;
-    return route[0].ot_id === otId || route[route.length - 1].ot_id === otId;
-  };
+  const isEndpoint = (route, otId) =>
+    route.length > 0 && (route[0].ot_id === otId || route[route.length - 1].ot_id === otId);
 
   for (const { i, j } of savings) {
     const ri = routeOf.get(i.ot_id);
@@ -348,174 +367,291 @@ export function clarkeWrightRoutes(ordenes, {
     const routeJ = routesById.get(rj);
     if (!routeI || !routeJ) continue;
     if (!isEndpoint(routeI, i.ot_id) || !isEndpoint(routeJ, j.ot_id)) continue;
-
-    if (routeI.length + routeJ.length > maxStopsPerRoute) continue;
+    if (routeI.length + routeJ.length > cx.maxStops) continue;
     if (tagsConflict(unionTags(routeI), unionTags(routeJ))) continue;
 
-    let left = [...routeI];
-    let right = [...routeJ];
+    const left = [...routeI];
+    const right = [...routeJ];
     if (left[0].ot_id === i.ot_id) left.reverse();
     if (left[left.length - 1].ot_id !== i.ot_id) continue;
     if (right[right.length - 1].ot_id === j.ot_id) right.reverse();
     if (right[0].ot_id !== j.ot_id) continue;
 
     const merged = left.concat(right);
-    if (!isFeasibleRoute(merged, {
-      depot, capacity, capacityWeight, startMs, velocidadKmH,
-    })) continue;
+    if (!isFeasibleRoute(merged, cx, tm)) continue;
+    const load = loadOf(merged);
+    if (cx.heterogeneous) {
+      const others = [];
+      for (const [id, l] of loadById) if (id !== ri && id !== rj) others.push(l);
+      if (!fleetStillFits(cx, others, load)) continue;
+    }
 
     const newId = `r${nextId++}`;
     routesById.set(newId, merged);
+    loadById.set(newId, load);
     for (const o of merged) routeOf.set(o.ot_id, newId);
     routesById.delete(ri);
     routesById.delete(rj);
+    loadById.delete(ri);
+    loadById.delete(rj);
   }
 
   return Array.from(routesById.values()).filter((r) => r.length > 0);
 }
 
 /**
- * Intra-route: nearest neighbor seed then 2-opt (SLA-aware).
+ * Secuencia dentro de una ruta: semillas (vecino más cercano ponderado por el
+ * perfil, "vence primero" y el orden recibido) + 2-opt. Gana la factible más
+ * barata. El orden recibido va como semilla para que resecuenciar una ruta que
+ * ya cumplía las ventanas nunca la vuelva infactible.
  */
-export function sequenceRoute(stops, {
-  depot = DEFAULT_DEPOT,
-  startMs = Date.now(),
-  pesos = {},
-  velocidadKmH = 35,
-  serviceSecondsFn = null,
-  capacity = Infinity,
-  capacityWeight = Infinity,
-} = {}) {
+export function sequenceRoute(stops, opts = {}) {
   if (!stops?.length) return [];
   if (stops.length === 1) return [...stops];
+  const { tm, cx, pesos } = ctxFrom(opts);
+  const inner = { ...opts, timing: tm, cx, pesos };
 
   const pending = [...stops];
-  const ordered = [];
-  let lat = depot.lat;
-  let lng = depot.lng;
+  const nn = [];
+  let lat = tm.depot.lat;
+  let lng = tm.depot.lng;
+  const wDist = numW(pesos.peso_distancia, 1);
+  const wSla = numW(pesos.peso_sla, 1);
+  const wVal = numW(pesos.peso_valor_carga, 0);
+  const wRiesgo = numW(pesos.peso_riesgo_ia, 0);
   while (pending.length) {
     let bestIdx = 0;
     let bestScore = Infinity;
     for (let i = 0; i < pending.length; i++) {
       const p = pending[i];
-      const dist = calcularDistanciaKm(lat, lng, p.lat, p.lng);
-      const wDist = numW(pesos.peso_distancia, 1);
-      const wSla = numW(pesos.peso_sla, 1);
-      const wVal = numW(pesos.peso_valor_carga, 0);
-      const wRiesgo = numW(pesos.peso_riesgo_ia, 0);
-      const valorMillones = Number(p.valor_oc_clp || 0) / 1e6;
-      const riesgo = Number(p.riesgo_score || p.risk_score || 0) / 100;
       const score =
-        dist * wDist
-        - slaUrgency(p, startMs) * 12 * wSla
-        - valorMillones * 70 * wVal
-        - riesgo * 40 * wRiesgo;
+        calcularDistanciaKm(lat, lng, p.lat, p.lng) * wDist
+        - slaUrgency(p, tm.startMs) * 12 * wSla
+        - (Number(p.valor_oc_clp || 0) / 1e6) * 70 * wVal
+        - (Number(p.riesgo_score || p.risk_score || 0) / 100) * 40 * wRiesgo;
       if (score < bestScore) {
         bestScore = score;
         bestIdx = i;
       }
     }
     const pick = pending.splice(bestIdx, 1)[0];
-    ordered.push(pick);
+    nn.push(pick);
     lat = pick.lat;
     lng = pick.lng;
   }
 
-  return twoOptRoute(ordered, {
-    depot, startMs, pesos, velocidadKmH, capacity, capacityWeight,
-  });
+  // Las otras semillas solo si la primera no cumple ventanas (ahorra CPU en el caso común)
+  const seeds = [
+    () => nn,
+    () => [...stops].sort((a, b) => (stopWindowEndMs(a) ?? Infinity) - (stopWindowEndMs(b) ?? Infinity)),
+    () => stops,
+  ];
+  let best = null;
+  for (const seed of seeds) {
+    const r = twoOptRoute(seed(), inner);
+    const feasible = isFeasibleRoute(r, cx, tm);
+    const cost = routeCost(r, tm, pesos);
+    if (!best || (feasible && !best.feasible) || (feasible === best.feasible && cost + 1e-9 < best.cost)) {
+      best = { r, feasible, cost };
+    }
+    // Rutas cortas: probar todas (barato, a veces "vence primero" sale más corta)
+    if (best.feasible && stops.length > FULL_SEEDS_MAX_STOPS) break;
+  }
+  return best.r;
 }
 
 /**
- * Full solve: Clarke-Wright clustering → NN+2-opt sequencing per route.
+ * Parte una ruta inviable (plan k-means) en tramos que sí cumplen: primero separa
+ * peligrosos de alimentos, después corta por capacidad/ventanas/máx. paradas.
  */
-export function solveVrp(ordenes, {
-  depot = DEFAULT_DEPOT,
-  capacity = 100,
-  capacityWeight = Infinity,
-  maxVehicles = 99,
-  maxStopsPerRoute = 24,
-  startMs = Date.now(),
-  pesos = { peso_distancia: 1, peso_sla: 1, peso_valor_carga: 0 },
-  velocidadKmH = 35,
-} = {}) {
-  const list = Array.isArray(ordenes) ? ordenes : [];
-  if (!list.length) {
-    return { routes: [], solver: 'clarke-wright-2opt-vrptw', kmEstimado: 0 };
+function repairRoute(route, ctx) {
+  if (isFeasibleRoute(route, ctx.cx, ctx.tm)) return [route];
+  let groups = [route];
+  if (!routeSegregationOk(route)) {
+    const haz = route.filter((s) => hasHazmat(stopTags(s)));
+    const rest = route.filter((s) => !hasHazmat(stopTags(s)));
+    groups = [haz, rest].filter((g) => g.length);
   }
-
-  const cap = Math.max(1, Number(capacity) || 100);
-  const capW = Number.isFinite(Number(capacityWeight)) ? Number(capacityWeight) : Infinity;
-  let rawRoutes = clarkeWrightRoutes(list, {
-    depot,
-    capacity: cap,
-    capacityWeight: capW,
-    maxStopsPerRoute,
-    startMs,
-    velocidadKmH,
-  });
-
-  while (rawRoutes.length > maxVehicles && rawRoutes.length > 1) {
-    rawRoutes.sort((a, b) => routeVolume(a) - routeVolume(b));
-    const a = rawRoutes.shift();
-    const b = rawRoutes.shift();
-    const merged = [...a, ...b];
-    const canMerge =
-      routeVolume(merged) <= cap * 1.15 &&
-      merged.length <= maxStopsPerRoute &&
-      !tagsConflict(unionTags(a), unionTags(b)) &&
-      isFeasibleRoute(merged, {
-        depot, capacity: cap * 1.15, capacityWeight: capW, startMs, velocidadKmH,
-      });
-    if (canMerge) {
-      rawRoutes.push(merged);
-    } else {
-      rawRoutes.unshift(b, a);
-      break;
-    }
-  }
-
-  if (rawRoutes.length > maxVehicles) {
-    rawRoutes.sort((a, b) => b.length - a.length);
-    const kept = rawRoutes.slice(0, maxVehicles);
-    const leftover = rawRoutes.slice(maxVehicles).flat();
-    for (const o of leftover) {
-      kept.sort((a, b) => routeVolume(a) - routeVolume(b));
-      const trial = [...kept[0], o];
-      if (
-        kept[0].length < maxStopsPerRoute &&
-        isFeasibleRoute(trial, {
-          depot, capacity: cap, capacityWeight: capW, startMs, velocidadKmH,
-        })
-      ) {
-        kept[0].push(o);
+  const out = [];
+  for (const g of groups) {
+    const seq = sequenceRoute(g, ctx.opts);
+    let cur = [];
+    for (const s of seq) {
+      const trial = cur.concat([s]);
+      if (cur.length && !isFeasibleRoute(trial, ctx.cx, ctx.tm)) {
+        out.push(cur);
+        cur = [s];
       } else {
-        kept.push([o]);
+        cur = trial;
       }
     }
-    rawRoutes = kept.slice(0, maxVehicles);
+    if (cur.length) out.push(cur);
   }
+  return out;
+}
 
-  rawRoutes = enforceVehicleCount(rawRoutes, maxVehicles, list, depot);
+/** Junta rutas (la fusión que menos km agrega y cumple todo) hasta llegar a `target`. */
+function mergeDown(routes, target, ctx) {
+  let out = routes.map((r) => [...r]);
+  const { cx, tm } = ctx;
+  while (out.length > target) {
+    let best = null;
+    for (let i = 0; i < out.length; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        const a = out[i];
+        const b = out[j];
+        if (a.length + b.length > cx.maxStops) continue;
+        if (tagsConflict(unionTags(a), unionTags(b))) continue;
+        const others = out.filter((_, k) => k !== i && k !== j).map(loadOf);
+        const base = routeDistanceKm(a, tm.depot) + routeDistanceKm(b, tm.depot);
+        for (const cand of [a.concat(b), b.concat(a), a.concat([...b].reverse()), [...a].reverse().concat(b)]) {
+          if (!isFeasibleRoute(cand, cx, tm)) continue;
+          if (!fleetStillFits(cx, others, loadOf(cand))) continue;
+          const cost = routeDistanceKm(cand, tm.depot) - base;
+          if (!best || cost < best.cost) best = { i, j, cand, cost };
+        }
+      }
+    }
+    if (!best) break; // no se puede juntar más sin violar algo: sobran rutas (quedan sin asignar)
+    out = out.filter((_, k) => k !== best.i && k !== best.j);
+    out.push(sequenceRoute(best.cand, ctx.opts));
+  }
+  return out;
+}
 
-  const routes = rawRoutes.map((r) =>
-    sequenceRoute(r, {
-      depot, startMs, pesos, velocidadKmH, capacity: cap, capacityWeight: capW,
-    })
-  );
+/** "Usar todos": parte la ruta más larga (por secuencia) hasta llegar a `target`. */
+function splitUp(routes, target, ctx) {
+  let out = routes.map((r) => [...r]);
+  while (out.length < target) {
+    out.sort((a, b) => b.length - a.length);
+    const big = out[0];
+    if (!big || big.length < 2) break;
+    const seq = sequenceRoute(big, ctx.opts);
+    const mid = Math.ceil(seq.length / 2);
+    out = [...out.slice(1), seq.slice(0, mid), seq.slice(mid)];
+  }
+  return out;
+}
 
-  const kmEstimado = routes.reduce((s, r) => s + routeDistanceKm(r, depot), 0);
-  const score = routes.reduce(
-    (s, r) => s + routeCost(r, depot, startMs, pesos, velocidadKmH),
-    0
-  );
+/**
+ * "Usar todos" parejo: mueve paradas de la ruta más larga a la más corta
+ * (la que menos km agrega y cumple todo) hasta que difieran en ≤ 1 parada.
+ */
+function balance(routes, ctx) {
+  let out = routes.map((r) => [...r]);
+  const { cx, tm } = ctx;
+  const totalStops = out.reduce((s, r) => s + r.length, 0);
+  for (let iter = 0; iter < totalStops * 2; iter++) {
+    out.sort((a, b) => a.length - b.length);
+    const small = out[0];
+    const big = out[out.length - 1];
+    if (!small || !big || big.length - small.length <= 1) break;
+    const others = out.slice(1, -1).map(loadOf);
+    let best = null;
+    const bigKm = routeDistanceKm(big, tm.depot);
+    const smallKm = routeDistanceKm(small, tm.depot);
+    for (let si = 0; si < big.length; si++) {
+      const s = big[si];
+      if (tagsConflict(unionTags(small), stopTags(s))) continue;
+      const bigAfter = big.filter((_, k) => k !== si);
+      if (!isFeasibleRoute(bigAfter, cx, tm)) continue;
+      for (let pos = 0; pos <= small.length; pos++) {
+        const cand = [...small.slice(0, pos), s, ...small.slice(pos)];
+        if (!isFeasibleRoute(cand, cx, tm)) continue;
+        if (cx.heterogeneous && !fleetGreedyOk([...others, loadOf(cand), loadOf(bigAfter)], cx.fleet)) continue;
+        const delta = routeDistanceKm(cand, tm.depot) - smallKm + routeDistanceKm(bigAfter, tm.depot) - bigKm;
+        if (!best || delta < best.delta) best = { si, cand, bigAfter, delta };
+      }
+    }
+    if (!best) break;
+    out = [best.cand, ...out.slice(1, -1), best.bigAfter];
+  }
+  return out;
+}
 
-  return {
-    routes,
-    solver: 'clarke-wright-2opt-vrptw',
-    kmEstimado: Number(kmEstimado.toFixed(2)),
-    score: Number(score.toFixed(2)),
+function evaluateRoutes(routes, allStops, ctx) {
+  const { cx, tm, pesos } = ctx;
+  const ids = new Set(routes.flat().map((s) => String(s.ot_id)));
+  const sizes = routes.map((r) => r.length);
+  const fleet = cx.fleet || [];
+  const match = fleet.length ? matchRoutesToFleet(routes, fleet) : { unmatched: [] };
+  const violations = {
+    segregation: routes.filter((r) => !routeSegregationOk(r)).length,
+    capacity: routes.filter((r) => !fitsCapacity(r, cx.maxCap, cx.maxCapW).ok).length,
+    missing: allStops.filter((s) => !ids.has(String(s.ot_id))).length,
+    unmatched: match.unmatched.length,
+    tw: routes.filter((r) => !simulate(r, tm).ok).length,
+    imbalance: sizes.length ? Math.max(...sizes) - Math.min(...sizes) : 0,
   };
+  violations.hard = violations.segregation + violations.capacity + violations.missing + violations.unmatched;
+  const km = routes.reduce((s, r) => s + routeDistanceKm(r, tm.depot), 0);
+  const score = routes.reduce((s, r) => s + routeCost(r, tm, pesos), 0);
+  return { violations, kmEstimado: Number(km.toFixed(2)), score: Number(score.toFixed(2)) };
+}
+
+/**
+ * Arma el contexto común de una corrida: flota real o N camiones iguales,
+ * "hasta N" vs "usar todos", modelo de tiempo.
+ */
+function buildContext(list, opts) {
+  const maxStops = Math.max(1, Number(opts.maxStopsPerRoute) || 24);
+  const requested = Math.max(1, Math.floor(Number(opts.maxVehicles) || 99));
+  let fleet;
+  if (Array.isArray(opts.vehicles) && opts.vehicles.length) {
+    fleet = normalizeFleet(opts.vehicles).slice(0, requested);
+  } else {
+    const n = Math.max(1, Math.min(requested, list.length || 1));
+    const cap = Math.max(1, Number(opts.capacity) || 100);
+    const capW = Number.isFinite(Number(opts.capacityWeight)) ? Number(opts.capacityWeight) : Infinity;
+    fleet = normalizeFleet(Array.from({ length: n }, () => ({ capacity: cap, capacityWeight: capW })));
+  }
+  const tm = opts.timing || makeTiming(opts);
+  const cx = makeConstraints({ fleet, maxStopsPerRoute: maxStops });
+  const pesos = opts.pesos || { peso_distancia: 1, peso_sla: 1, peso_valor_carga: 0 };
+  const force = Boolean(opts.forceAllVehicles);
+  const target = force ? Math.min(fleet.length, list.length) : fleet.length;
+  const ctx = { tm, cx, pesos, force, target, maxStops };
+  ctx.opts = { timing: tm, cx, pesos };
+  return ctx;
+}
+
+/** Repara, junta/parte según el modo, balancea y secuencia un plan crudo. */
+function finalize(rawRoutes, list, ctx, solverName) {
+  let routes = [];
+  for (const r of rawRoutes) if (r.length) routes.push(...repairRoute(r, ctx));
+  routes = mergeDown(routes, ctx.target, ctx);
+  if (ctx.force) {
+    routes = splitUp(routes, ctx.target, ctx);
+    routes = balance(routes, ctx);
+  }
+  routes = routes.filter((r) => r.length).map((r) => sequenceRoute(r, ctx.opts));
+  return { routes, solver: solverName, ...evaluateRoutes(routes, list, ctx) };
+}
+
+function validStops(ordenes) {
+  return (Array.isArray(ordenes) ? ordenes : []).filter(
+    (o) => o && Number.isFinite(Number(o.lat)) && Number.isFinite(Number(o.lng))
+  );
+}
+
+/**
+ * Clarke-Wright → reparación → N° de camiones → secuencia.
+ * opts.forceAllVehicles: usar los N camiones repartidos parejo; si no, hasta N.
+ * opts.vehicles: flota real [{capacity, capacityWeight}] (si no, N iguales).
+ */
+export function solveVrp(ordenes, opts = {}) {
+  const list = validStops(ordenes);
+  if (!list.length) {
+    return { routes: [], solver: 'clarke-wright-2opt-vrptw', kmEstimado: 0, score: 0, violations: { hard: 0, tw: 0, imbalance: 0 } };
+  }
+  const ctx = buildContext(list, opts);
+  let cwCx = ctx.cx;
+  if (ctx.force && ctx.target > 1) {
+    // Tope de paradas ≈ T/N: Clarke-Wright ya arma rutas del tamaño parejo
+    cwCx = { ...ctx.cx, maxStops: Math.max(1, Math.min(ctx.maxStops, Math.ceil(list.length / ctx.target))) };
+  }
+  const raw = clarkeWrightRoutes(list, { timing: ctx.tm, cx: cwCx });
+  return finalize(raw, list, ctx, 'clarke-wright-2opt-vrptw');
 }
 
 /** Deterministic PRNG for legacy multi-start */
@@ -529,10 +665,8 @@ function mulberry32(seed) {
   };
 }
 
-function capacitatedKMeansLegacy(ordenes, capacidadMaxVolumen, rng) {
+function capacitatedKMeans(ordenes, K, capacidadMaxVolumen, rng) {
   if (ordenes.length === 0) return [];
-  const volumenTotal = ordenes.reduce((acc, o) => acc + Number(o.volumen), 0);
-  const K = Math.max(1, Math.ceil(volumenTotal / capacidadMaxVolumen));
   let centroides = [];
   for (let i = 0; i < K; i++) {
     const randomOrder = ordenes[Math.floor(rng() * ordenes.length)];
@@ -556,9 +690,9 @@ function capacitatedKMeansLegacy(ordenes, capacidadMaxVolumen, rng) {
     const asignadas = new Set();
     for (const d of distancias) {
       const orden = ordenes[d.ordenIdx];
-      if (!asignadas.has(d.ordenIdx) && capacidades[d.clusterIdx] >= Number(orden.volumen)) {
+      if (!asignadas.has(d.ordenIdx) && capacidades[d.clusterIdx] >= Number(orden.volumen || 1)) {
         clusters[d.clusterIdx].push(orden);
-        capacidades[d.clusterIdx] -= Number(orden.volumen);
+        capacidades[d.clusterIdx] -= Number(orden.volumen || 1);
         asignadas.add(d.ordenIdx);
       }
     }
@@ -571,6 +705,8 @@ function capacitatedKMeansLegacy(ordenes, capacidadMaxVolumen, rng) {
       }
     }
   }
+  // Las que no entraron por capacidad van al cluster más cercano; la reparación
+  // posterior las separa si se pasan (antes quedaban así, sobre capacidad).
   const assigned = new Set(clusters.flat().map((o) => o.ot_id));
   for (const h of ordenes.filter((o) => !assigned.has(o.ot_id))) {
     let best = 0;
@@ -588,70 +724,54 @@ function capacitatedKMeansLegacy(ordenes, capacidadMaxVolumen, rng) {
 }
 
 /**
- * Legacy k-means + greedy (pre-E), multi-start with seed.
+ * k-means + greedy (multi-start con seed). Pasa por la misma reparación que
+ * Clarke-Wright: antes sus planes ignoraban peso y segregación y, como salían
+ * más cortos, le ganaban al plan bueno y el optimizador dejaba OTs sin chofer.
  */
 export function solveVrpLegacy(ordenes, opts = {}) {
-  const {
-    depot = DEFAULT_DEPOT,
-    capacity = 100,
-    maxVehicles = 99,
-    maxStopsPerRoute = 24,
-    startMs = Date.now(),
-    pesos = { peso_distancia: 1, peso_sla: 1, peso_valor_carga: 0 },
-    velocidadKmH = 35,
-    seed = 1,
-  } = opts;
-  const list = Array.isArray(ordenes) ? ordenes : [];
-  if (!list.length) return { routes: [], solver: 'kmeans-greedy', kmEstimado: 0 };
+  const list = validStops(ordenes);
+  const seed = opts.seed ?? 1;
+  if (!list.length) {
+    return { routes: [], solver: `kmeans-greedy#${seed}`, kmEstimado: 0, score: 0, violations: { hard: 0, tw: 0, imbalance: 0 } };
+  }
+  const ctx = buildContext(list, opts);
+  const totalVol = list.reduce((acc, o) => acc + Number(o.volumen || 1), 0);
+  const K = ctx.force
+    ? ctx.target
+    : Math.max(1, Math.min(ctx.target, Math.ceil(totalVol / Math.max(1, ctx.cx.maxCap))));
+  const clusters = capacitatedKMeans(list, K, Math.max(1, ctx.cx.maxCap), mulberry32(seed));
+  return finalize(clusters, list, ctx, `kmeans-greedy#${seed}`);
+}
 
-  const rng = mulberry32(seed);
-  let clusters = capacitatedKMeansLegacy(list, Math.max(1, Number(capacity) || 100), rng);
-  // M-11: partir clusters que excedan maxStopsPerRoute
-  const capped = [];
-  for (const c of clusters) {
-    for (let i = 0; i < c.length; i += maxStopsPerRoute) {
-      capped.push(c.slice(i, i + maxStopsPerRoute));
-    }
+function candidateKey(c, force) {
+  const v = c.violations || {};
+  return [v.hard || 0, v.tw || 0, force && (v.imbalance || 0) > 1 ? 1 : 0, c.score ?? c.kmEstimado];
+}
+
+function compareKeys(a, b) {
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] < b[i] - 1e-9) return -1;
+    if (a[i] > b[i] + 1e-9) return 1;
   }
-  clusters = capped;
-  while (clusters.length > maxVehicles && clusters.length > 1) {
-    clusters.sort((a, b) => a.length - b.length);
-    const a = clusters.shift();
-    const b = clusters.shift();
-    const merged = [...a, ...b];
-    if (merged.length <= maxStopsPerRoute) clusters.push(merged);
-    else {
-      clusters.push(a);
-      clusters.push(b);
-      break;
-    }
-  }
-  clusters = enforceVehicleCount(clusters, maxVehicles, list, depot);
-  const routes = clusters.map((c) => sequenceRoute(c, { depot, startMs, pesos, velocidadKmH }));
-  const kmEstimado = routes.reduce((s, r) => s + routeDistanceKm(r, depot), 0);
-  const score = routes.reduce(
-    (s, r) => s + routeCost(r, depot, startMs, pesos, velocidadKmH),
-    0
-  );
-  return {
-    routes,
-    solver: `kmeans-greedy#${seed}`,
-    kmEstimado: Number(kmEstimado.toFixed(2)),
-    score: Number(score.toFixed(2)),
-  };
+  return 0;
 }
 
 /**
- * Corre Clarke-Wright+2opt y varios seeds legacy; elige el mejor según
- * el score del perfil (distancia + SLA + valor + riesgo), no solo km.
+ * Corre Clarke-Wright+2opt y varios seeds k-means; elige primero el que NO viola
+ * restricciones duras (segregación, capacidad, flota, paradas perdidas), después
+ * el de menos ventanas incumplidas, después (si "usar todos") el parejo, y recién
+ * ahí el de mejor score del perfil.
  */
 export function solveVrpAuto(ordenes, opts = {}) {
-  const candidates = [solveVrp(ordenes, opts)];
-  // M-11: menos seeds para acotar CPU en Workers
+  const list = validStops(ordenes);
+  const shared = list.length ? { ...opts, timing: opts.timing || makeTiming(opts) } : opts;
+  const candidates = [solveVrp(list, shared)];
+  // M-11: pocos seeds para acotar CPU en Workers
   for (const seed of [1, 7, 17]) {
-    candidates.push(solveVrpLegacy(ordenes, { ...opts, seed }));
+    candidates.push(solveVrpLegacy(list, { ...shared, seed }));
   }
-  candidates.sort((a, b) => (a.score ?? a.kmEstimado) - (b.score ?? b.kmEstimado));
+  const force = Boolean(opts.forceAllVehicles);
+  candidates.sort((a, b) => compareKeys(candidateKey(a, force), candidateKey(b, force)));
   const best = candidates[0];
   return {
     ...best,
@@ -660,6 +780,8 @@ export function solveVrpAuto(ordenes, opts = {}) {
       solver: c.solver,
       km: c.kmEstimado,
       score: c.score ?? c.kmEstimado,
+      violaciones: c.violations?.hard ?? 0,
+      ventanas: c.violations?.tw ?? 0,
     })),
   };
 }

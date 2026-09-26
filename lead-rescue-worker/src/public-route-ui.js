@@ -1,7 +1,16 @@
 // src/public-route-ui.js
 // 🎨 PLANTILLA HTML/CSS/JS PARA PÁGINA PÚBLICA DE TRACKING CON MAPA
 
-export function renderPublicRouteHTML(tripId, paradas, token) {
+const OSM_FALLBACK_TILES = {
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  maxZoom: 19,
+  maxNativeZoom: 19,
+};
+
+export function renderPublicRouteHTML(tripId, paradas, token, mapTiles = null) {
+  // JSON embebido en <script>: escapar "<" para que un "</script>" no cierre el tag
+  const tilesJson = JSON.stringify(mapTiles || OSM_FALLBACK_TILES).replace(/</g, '\\u003c');
   const completadas = paradas.filter(p => p.estado === 'ENTREGADO').length;
   const total = paradas.length;
   const porcentaje = total > 0 ? Math.round((completadas / total) * 100) : 0;
@@ -539,8 +548,12 @@ export function renderPublicRouteHTML(tripId, paradas, token) {
       tap: false
     }).setView([${centerLat}, ${centerLng}], 12);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap, © CartoDB'
+    // CARTO sin API key sirve tiles borrosas con marca de agua: Mapbox vía Worker u OSM
+    const tiles = ${tilesJson};
+    L.tileLayer(tiles.url, {
+      attribution: tiles.attribution,
+      maxZoom: tiles.maxZoom,
+      maxNativeZoom: tiles.maxNativeZoom,
     }).addTo(map);
 
     if (paradas.length > 0) {

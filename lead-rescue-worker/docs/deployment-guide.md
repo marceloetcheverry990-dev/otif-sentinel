@@ -176,17 +176,11 @@ Verificar que aparecen **dos** crons: `*/2 * * * *` y `0 2 * * *`.
 Los secrets se configuran separado del código y no requieren redeploy posterior:
 
 ```bash
-# Token del bot de Telegram (obligatorio)
-npx wrangler secret put TG_BOT_TOKEN
-
 # Clave de OpenAI (obligatorio)
 npx wrangler secret put OPENAI_API_KEY
 
 # Secret de Meta (si aplica)
 npx wrangler secret put META_APP_SECRET
-
-# Chat ID separado para alertas de monitoreo (opcional)
-npx wrangler secret put MONITORING_CHAT_ID
 ```
 
 > ⚠️ Cada comando pide el valor interactivamente. No pegar valores en el shell directamente
@@ -351,7 +345,7 @@ CREATE TABLE alert_history_backup AS SELECT * FROM alert_history;
 - [ ] **Fase 2:** Worker deployado
   - [ ] `npx wrangler deploy --dry-run` pasó sin errores
   - [ ] `npx wrangler deploy` exitoso
-  - [ ] Secrets configurados (`TG_BOT_TOKEN`, `OPENAI_API_KEY`)
+  - [ ] Secrets configurados (`OPENAI_API_KEY`, `JWT_SECRET`, `MAPBOX_TOKEN`)
   - [ ] Dos crons visibles en el output del deploy
 - [ ] **Fase 3:** Verificación post-deployment
   - [ ] V1 `/health` → HTTP 200, `status: healthy`
@@ -385,7 +379,6 @@ CREATE TABLE alert_history_backup AS SELECT * FROM alert_history;
 - `MONITORING_USERNAME` — de bajo riesgo, puede quedarse en vars
 
 **Secrets correctamente configurados (no en repositorio):**
-- `TG_BOT_TOKEN`
 - `OPENAI_API_KEY`
 - `META_APP_SECRET`
 - `JWT_SECRET` — pendiente de configurar en producción (ver sección Fase 2)
@@ -396,7 +389,7 @@ CREATE TABLE alert_history_backup AS SELECT * FROM alert_history;
 3. `MONITORING_PASSWORD` en texto plano en vars — ver `docs/configuration.md` Issue 3
 
 **Rotación de secrets:**
-Al rotar `TG_BOT_TOKEN` o `OPENAI_API_KEY`, ejecutar `npx wrangler secret put <NOMBRE>` con el
+Al rotar `OPENAI_API_KEY` u otro secret, ejecutar `npx wrangler secret put <NOMBRE>` con el
 nuevo valor. No requiere redeploy — el worker lo toma en el siguiente request.
 
 ---

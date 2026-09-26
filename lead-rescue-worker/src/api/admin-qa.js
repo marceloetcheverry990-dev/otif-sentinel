@@ -198,8 +198,6 @@ async function ensureTresCamionesDemo(client, tenant_id) {
       };
       if (Object.prototype.hasOwnProperty.call(src, 'email')) overrides.email = 'camila.rios.video@demo.cl';
       if (Object.prototype.hasOwnProperty.call(src, 'telefono')) overrides.telefono = '+56911110003';
-      if (Object.prototype.hasOwnProperty.call(src, 'telegram_chat_id')) overrides.telegram_chat_id = null;
-      if (Object.prototype.hasOwnProperty.call(src, 'telegram_id')) overrides.telegram_id = null;
 
       const skipCols = new Set(['id']);
       const insertCols = colsRes.rows.filter((c) => {

@@ -1,5 +1,9 @@
 # Implementation Plan: Stability and Monitoring System
 
+> **Nota (2026-09):** las tareas de entrega por Telegram (6.3 y relacionadas) quedaron
+> obsoletas: hoy las alertas solo van a `alert_history` y al dashboard de monitoreo, y
+> todo lo de Telegram se eliminó (código + migración 030). Se conservan como registro.
+
 ## Overview
 
 This implementation plan transforms the OTIF Sentinel logistics platform into a production-ready system with comprehensive observability infrastructure. The monitoring system follows a non-invasive middleware pattern that wraps existing components without breaking current functionality, providing health checks, structured logging, error tracking, performance metrics, operational alerting, and visual dashboards.

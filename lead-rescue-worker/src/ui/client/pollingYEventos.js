@@ -490,7 +490,8 @@ export const POLLING_EVENTOS_SCRIPT = `
               }
 
               // Override dispatcher: ↑ ↓ mover (paradas abiertas; no canceladas)
-              var isCancelado = String(p.estado_operacional || '').toUpperCase() === 'CANCELADO_PLANILLA';
+              var stUpper = String(p.estado_operacional || '').toUpperCase();
+              var isCancelado = stUpper === 'CANCELADO_PLANILLA' || stUpper === 'RETORNO_BODEGA';
               var overrideBtns = '';
               if (!isEntregado && !isRechazado && !isEnSitio && !isCancelado) {
                 overrideBtns =
@@ -1227,7 +1228,9 @@ export const POLLING_EVENTOS_SCRIPT = `
                     if (!viaje) return;
                     var abiertas = (viaje.detalle_paradas || []).filter(function(p) {
                       var st = String(p.estado_operacional || '').toUpperCase();
-                      return st !== 'ENTREGADO' && st !== 'RECHAZADO' && st !== 'EN_SITIO' && st !== 'CANCELADO_PLANILLA';
+                      // Mismo criterio que trip-manual.js: congeladas + fuera de ruta no van en ot_ids
+                      return st !== 'ENTREGADO' && st !== 'RECHAZADO' && st !== 'EN_SITIO'
+                        && st !== 'CANCELADO_PLANILLA' && st !== 'RETORNO_BODEGA';
                     });
                     var ids = abiertas.map(function(p) { return String(p.ot_id); });
                     var idx = ids.indexOf(String(otId));
@@ -1504,6 +1507,7 @@ export const POLLING_EVENTOS_SCRIPT = `
                     tenant_id: window._TENANT_ID || 'empresa_base',
                     perfil_id: document.getElementById('perfilRuteo').value, 
                     flota_disponible: nCamiones,
+                    usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                     clima: document.getElementById('climaRuteo').value,
                     depot_id: (document.getElementById('depotRuteo') || {}).value || null,
                     is_simulacion: false 
@@ -1514,8 +1518,15 @@ export const POLLING_EVENTOS_SCRIPT = `
                 if (res.ok && Number(data.viajes_creados || 0) > 0) {
                   var syncOk = document.getElementById('syncStatus');
                   if (syncOk) {
-                    syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados';
+                    syncOk.textContent = '🟢 ' + (data.viajes_creados || 0) + ' viajes armados' +
+                      (data.camiones_disponibles ? ' (' + data.viajes_creados + ' de ' + data.camiones_disponibles + ' camiones)' : '');
+                    syncOk.title = data.resumen || '';
                     syncOk.style.color = '#86efac';
+                  }
+                  if (Array.isArray(data.sin_asignar_ids) && data.sin_asignar_ids.length) {
+                    setTimeout(function() {
+                      alert('Ruteo listo, pero ' + data.sin_asignar_ids.length + ' OT(s) quedaron sin chofer que las pueda llevar (capacidad, tags o faltan camiones). Siguen en Backlog.');
+                    }, 0);
                   }
                   if (typeof window.invalidateMapCache === 'function') window.invalidateMapCache();
                   if (busy) busy.textContent = 'Aplicando rutas… el mapa sigue activo.';
@@ -1611,6 +1622,7 @@ export const POLLING_EVENTOS_SCRIPT = `
                     incluir_backlog: incluirBacklog,
                     perfil_id: perfilEl && perfilEl.value,
                     flota_disponible: nCamiones,
+                    usar_todos: !!(document.getElementById('usarTodosCamiones') || {}).checked,
                     clima: climaEl && climaEl.value,
                     depot_id: (document.getElementById('depotRuteo') || {}).value || null
                   })

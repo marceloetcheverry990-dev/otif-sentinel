@@ -13,7 +13,7 @@
 1. [Diagnóstico rápido (5 minutos)](#1-diagnóstico-rápido-5-minutos)
 2. [Worker responde 503 / `/health` unhealthy](#2-worker-responde-503--health-unhealthy)
 3. [`/health/monitoring` responde degraded](#3-healthmonitoring-responde-degraded)
-4. [No llegan alertas de Telegram](#4-no-llegan-alertas-de-telegram)
+4. [Una alerta esperada no aparece en el dashboard](#4-una-alerta-esperada-no-aparece-en-el-dashboard)
 5. [Error rate elevado](#5-error-rate-elevado)
 6. [Circuit breaker abierto](#6-circuit-breaker-abierto)
 7. [Cola acumulada / backlog](#7-cola-acumulada--backlog)
@@ -26,7 +26,7 @@
 13. [Performance degradada](#13-performance-degradada)
 14. [Degradación graceful y mecanismos de fallback](#14-degradación-graceful-y-mecanismos-de-fallback)
     - 14.1 [Fallback de escrituras de monitoring a console.log](#141-fallback-de-escrituras-de-monitoring-a-consolelog)
-    - 14.2 [Fallback de alertas de Telegram](#142-fallback-de-alertas-de-telegram)
+    - 14.2 [Fallback de alertas](#142-fallback-de-alertas)
     - 14.3 [Degradación de health check con latencia alta](#143-degradación-de-health-check-con-latencia-alta)
     - 14.4 [Sampling en métricas de bajo tráfico](#144-sampling-en-métricas-de-bajo-tráfico)
 15. [Circuit breaker del sistema de monitoreo](#15-circuit-breaker-del-sistema-de-monitoreo)
@@ -145,23 +145,24 @@ FROM metrics_summary;
 
 ---
 
-## 4. No llegan alertas de Telegram
+## 4. Una alerta esperada no aparece en el dashboard
 
 **Tiempo estimado:** 5–10 minutos
 
-**Síntoma:** Se esperaba una alerta (condición excede umbral) pero no llegó ningún mensaje al chat.
+**Síntoma:** Se esperaba una alerta (condición excede umbral) pero no aparece en
+`/dashboard/monitoring`. Las alertas no salen a ningún canal externo: `sendAlert()`
+las deja en el log del Worker y en `alert_history`.
 
 **Posibles causas:**
 - La condición no superó el umbral realmente
 - Alerta deduplicada (dentro de la ventana de 15 min — comportamiento correcto)
-- Fallo en entrega a Telegram (token inválido, chat ID incorrecto)
 - `evaluateAlerts()` fallando silenciosamente
 
 **Diagnóstico:**
 
 ```sql
 -- Paso 1: ¿Hay registros en alert_history?
-SELECT alert_type, severity, delivery_status, delivery_error, timestamp
+SELECT alert_type, severity, delivery_status, timestamp
 FROM alert_history
 WHERE timestamp > NOW() - INTERVAL '30 minutes'
 ORDER BY timestamp DESC;
@@ -170,8 +171,7 @@ ORDER BY timestamp DESC;
 | Resultado | Diagnóstico |
 |-----------|-------------|
 | Sin filas | `evaluateAlerts` no detectó condición o no corrió |
-| Filas con `delivery_status = 'failed'` | Fallo en entrega a Telegram |
-| Filas con `delivery_status = 'sent'` | Alerta enviada — revisar el chat correcto |
+| Con filas | La alerta existe — revisar filtros del dashboard |
 
 ```sql
 -- Paso 2: ¿La condición se cumplió realmente?
@@ -179,23 +179,15 @@ SELECT ROUND(
   COUNT(*) FILTER (WHERE severity IN ('ERROR','CRITICAL'))::numeric / NULLIF(COUNT(*),0) * 100, 2
 ) AS tasa_error_pct
 FROM error_logs WHERE timestamp > NOW() - INTERVAL '5 minutes';
--- Si < 5, la alerta correctamente no se envió
-```
-
-```sql
--- Paso 3: Si delivery_status = 'failed', ver el error:
-SELECT delivery_error FROM alert_history
-WHERE delivery_status = 'failed' ORDER BY timestamp DESC LIMIT 3;
+-- Si < 5, la alerta correctamente no se generó
 ```
 
 **Mitigación:**
-- `delivery_status = 'failed'` con error de Telegram API: verificar que `TG_BOT_TOKEN` sea válido
-  en Cloudflare Dashboard → Workers → Settings → Variables
 - Sin filas y condición cumplida: puede haber un bug en `evaluateAlerts` — revisar
-  logs del worker en Cloudflare Dashboard
+  logs del worker en Cloudflare Dashboard (buscar `[ALERT_DASHBOARD]`)
 
-**Criterio de resolución:** Alerta recibida en Telegram dentro de los 2 minutos del próximo
-ciclo de cron cuando la condición sigue activa. `alert_history` muestra `delivery_status = 'sent'`.
+**Criterio de resolución:** La alerta aparece en `alert_history` y en el dashboard dentro
+de los 2 minutos del próximo ciclo de cron cuando la condición sigue activa.
 
 ---
 
@@ -204,7 +196,7 @@ ciclo de cron cuando la condición sigue activa. `alert_history` muestra `delive
 **Tiempo estimado:** 5–30 minutos
 → Runbook completo: [`runbooks/high-error-rate.md`](runbooks/high-error-rate.md)
 
-**Síntoma:** Alerta `high_error_rate` en Telegram, o el cálculo manual supera 5%.
+**Síntoma:** Alerta `high_error_rate` en el dashboard de monitoreo, o el cálculo manual supera 5%.
 
 **Queries clave:**
 ```sql
@@ -503,7 +495,7 @@ Esperado: JSON con `health`, `metrics`, `errors`, `alerts`.
 **Posibles causas:**
 - Queries DB lentas (sin índice, tabla grande, lock contention)
 - Batch de métricas en proceso de escritura bloqueando conexión
-- OpenAI o Telegram API respondiendo lento (impacta enrichment y delivery queues)
+- OpenAI respondiendo lento (impacta la cola de enrichment)
 - Worker en modo de alta carga: muchas requests concurrentes
 
 **Diagnóstico paso a paso:**
@@ -554,7 +546,6 @@ SELECT key, value, updated_at
 FROM system_flags WHERE key LIKE '%breaker%';
 ```
 Si `openai_breaker = 'OPEN'` → enriquecimiento IA saltado, puede ser intencional.
-Si `tg_breaker_% = 'OPEN'` → delivery Telegram saltado, mensajes se acumulan.
 
 **Paso 4 — Verificar métricas p95 recientes:**
 ```sql
@@ -612,10 +603,11 @@ GET /health/monitoring
 Mientras el status sea "degraded" **el worker sigue procesando requests normalmente**;
 solo se pierde observabilidad temporal.
 
-### 14.2 Fallback de alertas de Telegram
+### 14.2 Fallback de alertas
 
 **Comportamiento:**
-Si `sendAlert()` falla (timeout, token inválido, rate limit de Telegram):
+Las alertas no se envían a canales externos: `sendAlert()` solo las registra en el log
+(`[ALERT_DASHBOARD]`) y en `alert_history`. Si ese registro falla:
 - `delivery_status` en `alert_history` queda como `'failed'`
 - `delivery_error` almacena el mensaje de error
 - El sistema no reintenta automáticamente (el próximo ciclo de cron evaluará la condición nuevamente)
@@ -678,7 +670,7 @@ y `src/monitoring/errors.js`.
 **Umbral de activación:** 5 fallos consecutivos de operaciones de DB de monitoreo.
 **Timeout de reset:** 60 segundos.
 
-**Nota:** Este circuit breaker es diferente a `openai_breaker` y `tg_breaker` que residen
+**Nota:** Este circuit breaker es diferente a `openai_breaker`, que reside
 en `system_flags`. El circuit breaker de monitoreo es **in-memory** (no persiste en DB).
 
 ### 15.2 Detectar que el circuit breaker de monitoreo está abierto
@@ -735,12 +727,11 @@ npx wrangler deploy
 
 ### 15.4 Activación y recuperación de circuit breakers de servicios externos
 
-Los circuit breakers `openai_breaker` y `tg_breaker_*` residen en `system_flags` (DB) y
+El circuit breaker `openai_breaker` reside en `system_flags` (DB) y
 su estado persiste entre reinicios del worker.
 
 **Activación automática:**
 - `openai_breaker`: se abre cuando OpenAI API falla repetidamente (lógica en `src/ai.js`)
-- `tg_breaker_<chat_id>`: se abre cuando Telegram API falla repetidamente (lógica en delivery queue)
 
 **Recuperación automática:** el breaker intenta reconectarse después del timeout configurado.
 
@@ -759,7 +750,7 @@ ORDER BY key;
 -- Requiere confirmación del equipo de operaciones
 UPDATE system_flags
 SET value = 'CLOSED', updated_at = NOW()
-WHERE key = 'openai_breaker';   -- o 'tg_breaker_<chat_id>'
+WHERE key = 'openai_breaker';
 ```
 → Runbook completo: [`runbooks/circuit-breaker-open.md`](runbooks/circuit-breaker-open.md)
 
@@ -1171,7 +1162,7 @@ periódicas (recomendado: semanal).
 
 | Tiempo sin resolución | Acción |
 |----------------------|--------|
-| 5 min | Revisar status pages externas (Supabase, Cloudflare, Telegram, OpenAI) |
+| 5 min | Revisar status pages externas (Supabase, Cloudflare, Mapbox, OpenAI) |
 | 15 min | Contactar al responsable técnico del sistema |
 | 30 min | Si afecta SLA de clientes, notificar al equipo de operaciones |
 | 60 min | Evaluar modo de operación degradada (sin escrituras a DB, notificaciones manuales) |
@@ -1182,7 +1173,7 @@ periódicas (recomendado: semanal).
 |---------|-----|
 | Cloudflare (Workers + Hyperdrive) | https://www.cloudflarestatus.com |
 | Supabase | https://status.supabase.com |
-| Telegram | https://downdetector.com/status/telegram |
+| Mapbox | https://status.mapbox.com |
 | OpenAI | https://status.openai.com |
 
 ### Información para escalación
@@ -1191,7 +1182,7 @@ Al escalar, incluir:
 - URL del incidente: qué endpoint falló y cuándo
 - Output de `GET /health` y `GET /health/monitoring`
 - Output de las queries V3, V4, V5 del [Diagnóstico rápido](#1-diagnóstico-rápido-5-minutos)
-- Última alerta recibida en Telegram (si aplica)
+- Última alerta en `alert_history` / dashboard de monitoreo (si aplica)
 - Último deploy conocido (`wrangler deploy` genera un `Version ID` en el output)
 
 ### Accesos necesarios para diagnóstico
