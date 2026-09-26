@@ -142,7 +142,7 @@ describe('producción: ciclo completo en base de datos', () => {
     for (const [sku, q] of [['HARINA', 10], ['AGUA', 20], ['BOLSA', 300]]) {
       await client.query(`INSERT INTO inventario_bodega (tenant_id, depot_id, sku, qty_disponible) VALUES ($1, $2, $3, $4)`, [T, C, sku, q]);
     }
-  });
+  }, 60_000); // encender Postgres en memoria tarda varios segundos cuando corre junto a toda la suite
 
   it('CS01 solo acepta productos fabricados y no deja que un material sea componente de sí mismo', async () => {
     await expect(tx('CS01', { material: 'HARINA', centro: C, cantidad_base: 1, posiciones: [{ componente: 'AGUA', cantidad: 1 }] }))
